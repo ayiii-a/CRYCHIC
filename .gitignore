@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Large SwinUNETR SSL weights (~393 MB) — fetched from MONAI, not committed.
+# Only needed for raw-NIfTI Tier-1 input; the demo uses precomputed embeddings.
+adrd_nmed2024/assets/model_swinvit.pt
+
+# MONAI Model-Zoo bundles are downloaded automatically on first use.
+checkpoints/
+
+# OASIS-3-derived inputs: controlled-access and large — do not redistribute.
+data/
+
+# Misc
+*.log

@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CRYCHIC — Clinical Decision Support</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  body { background:#0b1220; }
+  .md h1 { font-size:1.25rem; font-weight:700; margin:.6rem 0 .4rem; color:#e2e8f0; }
+  .md h2 { font-size:1.02rem; font-weight:600; margin:.9rem 0 .35rem; color:#7dd3fc; }
+  .md p  { margin:.35rem 0; color:#cbd5e1; }
+  .md ul { margin:.3rem 0 .3rem 1.1rem; list-style:disc; color:#cbd5e1; }
+  .md li { margin:.15rem 0; }
+  .md strong { color:#e2e8f0; }
+  .md blockquote { border-left:3px solid #38bdf8; padding:.5rem .8rem; margin:.6rem 0;
+                   background:#0f1a2e; border-radius:.4rem; color:#bae6fd; font-size:.86rem; }
+  .md hr { border-color:#1e293b; margin:.8rem 0; }
+  .md code { background:#1e293b; padding:.05rem .3rem; border-radius:.25rem; color:#fbbf24; }
+  ::-webkit-scrollbar { width:9px; height:9px; }
+  ::-webkit-scrollbar-thumb { background:#1e293b; border-radius:6px; }
+</style>
+</head>
+<body class="text-slate-200 min-h-screen">
+
+<!-- ── Top bar ──────────────────────────────────────────────────────────── -->
+<header class="border-b border-slate-800 bg-slate-900/70 backdrop-blur sticky top-0 z-10">
+  <div class="max-w-7xl mx-auto px-5 py-3 flex items-center gap-4 flex-wrap">
+    <div class="flex items-center gap-2">
+      <span class="text-2xl">⚕️</span>
+      <div>
+        <div class="font-bold text-lg leading-tight">CRYCHIC</div>
+        <div class="text-[11px] text-slate-400 -mt-0.5">Clinical Decision Support — not a diagnostic device</div>
+      </div>
+    </div>
+    <div class="flex-1"></div>
+    <select id="caseSelect" class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm min-w-[16rem]"></select>
+    <button id="runBtn" class="bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed
+            px-4 py-1.5 rounded-lg text-sm font-semibold transition">Run pipeline</button>
+  </div>
+  <!-- stage stepper -->
+  <div id="stepper" class="max-w-7xl mx-auto px-5 pb-3 flex items-center gap-1 text-[11px] text-slate-500"></div>
+</header>
+
+<main class="max-w-7xl mx-auto px-5 py-5">
+  <div id="idle" class="text-center text-slate-500 py-24">
+    Pick a case and press <span class="text-sky-400 font-semibold">Run pipeline</span> to organize its evidence.
+  </div>
+
+  <div id="board" class="hidden grid grid-cols-1 lg:grid-cols-[22rem_1fr] gap-5">
+
+    <!-- ── Left column ─────────────────────────────────────────────────── -->
+    <section class="space-y-4">
+      <!-- case card -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <div class="flex items-baseline justify-between">
+          <h2 id="caseTitle" class="font-bold text-base">—</h2>
+          <span id="caseId" class="text-[11px] text-slate-500 font-mono"></span>
+        </div>
+        <div id="caseMeta" class="mt-1 text-sm text-slate-400"></div>
+        <div id="caseTruth" class="mt-2 text-[11px] text-slate-500"></div>
+      </div>
+
+      <!-- tier-1 -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <h3 class="text-xs uppercase tracking-wide text-slate-400 mb-2">Tier-1 screening · Xue 2024</h3>
+        <div class="text-[11px] text-slate-500 mb-1">Cognitive stage</div>
+        <div id="stageBars" class="space-y-1.5 mb-3"></div>
+        <div class="text-[11px] text-slate-500 mb-1">Etiology signal (non-exclusive)</div>
+        <div id="etioBars" class="space-y-1.5"></div>
+        <div id="tier1Note" class="mt-2 text-[11px] text-slate-500"></div>
+      </div>
+
+      <!-- routing -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <h3 class="text-xs uppercase tracking-wide text-slate-400 mb-2">Routing · rules + LLM rationale</h3>
+        <div id="routeTools" class="flex flex-wrap gap-1.5 mb-2"></div>
+        <ul id="routeRules" class="text-[11px] text-slate-500 space-y-0.5 mb-2 font-mono"></ul>
+        <p id="routeRationale" class="text-[12px] text-slate-300 italic"></p>
+      </div>
+
+      <!-- pattern + conflicts -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <h3 class="text-xs uppercase tracking-wide text-slate-400 mb-2">Matched pattern</h3>
+        <div id="pattern" class="text-sm"></div>
+        <h3 class="text-xs uppercase tracking-wide text-slate-400 mt-3 mb-2">Conflicts surfaced</h3>
+        <div id="conflicts" class="space-y-2"></div>
+      </div>
+    </section>
+
+    <!-- ── Right column ────────────────────────────────────────────────── -->
+    <section class="space-y-4">
+      <!-- imaging session -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-xs uppercase tracking-wide text-slate-400">Imaging session · regional analysis</h3>
+          <div class="flex gap-3 text-[11px]">
+            <span style="color:#ff5c42">■ hippocampus</span>
+            <span style="color:#4dccff">■ ventricles</span>
+          </div>
+        </div>
+        <div id="sliceGrid" class="grid grid-cols-1 sm:grid-cols-3 gap-3"></div>
+        <div id="tier2Cards" class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4"></div>
+      </div>
+
+      <!-- report -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="text-xs uppercase tracking-wide text-slate-400">Evidence report (draft)</h3>
+          <span id="selfCheck" class="text-[11px]"></span>
+        </div>
+        <div id="report" class="md text-sm"></div>
+        <!-- sign-off action bar -->
+        <div class="mt-4 pt-4 border-t border-slate-800">
+          <div class="flex flex-wrap gap-2">
+            <button data-act="agree" class="signoff bg-emerald-600 hover:bg-emerald-500 px-3.5 py-1.5 rounded-lg text-sm font-semibold">✓ Agree &amp; sign</button>
+            <button data-act="edit"  class="signoff bg-slate-700 hover:bg-slate-600 px-3.5 py-1.5 rounded-lg text-sm font-semibold">✏️ Edit</button>
+            <button data-act="disagree" class="signoff bg-rose-700 hover:bg-rose-600 px-3.5 py-1.5 rounded-lg text-sm font-semibold">✗ Disagree</button>
+          </div>
+          <p class="mt-2 text-[11px] text-slate-500">Nothing is written to any medical record — the clinician decides and signs outside this tool.</p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div id="errorBox" class="hidden bg-rose-950/60 border border-rose-800 rounded-xl p-4 text-sm text-rose-200 font-mono whitespace-pre-wrap"></div>
+</main>
+
+<div id="toast" class="hidden fixed bottom-5 left-1/2 -translate-x-1/2 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm shadow-xl"></div>
+
+<script>
+const STEPS = ["Screening","Routing","Imaging","Aggregating","Reasoning","Self-check","Complete"];
+let activeCaseId = null, pollTimer = null;
+
+const $ = (id) => document.getElementById(id);
+const pct = (v) => Math.round((v||0)*100);
+
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.remove("hidden");
+  clearTimeout(t._h); t._h=setTimeout(()=>t.classList.add("hidden"),2600); }
+
+function stepIndex(stage){
+  if(!stage) return -1;
+  if(stage.startsWith("self_check")||stage.startsWith("revising")) return 5;
+  return {initialized:-1,screening:0,routing:1,imaging:2,aggregating:3,
+          reasoning:4,self_check_passed:5,complete:6,failed:-1}[stage] ?? -1;
+}
+function renderStepper(stage, tools){
+  const cur = stepIndex(stage);
+  $("stepper").innerHTML = STEPS.map((s,i)=>{
+    const done = i < cur || stage==="complete";
+    const on = i === cur && stage!=="complete";
+    const cls = done ? "text-emerald-400" : on ? "text-sky-400 font-semibold" : "text-slate-600";
+    const dot = done ? "●" : on ? "◉" : "○";
+    let label = s;
+    if(i===2 && on && tools && tools.length) label += ` (${tools.join(", ")})`;
+    return `<span class="${cls}">${dot} ${label}</span>` + (i<STEPS.length-1?'<span class="text-slate-700 mx-1">—</span>':'');
+  }).join("");
+}
+
+function bar(label, v, accent){
+  return `<div class="flex items-center gap-2">
+    <span class="w-9 text-[11px] text-slate-400">${label}</span>
+    <div class="flex-1 h-2 bg-slate-800 rounded"><div class="h-2 rounded ${accent}" style="width:${pct(v)}%"></div></div>
+    <span class="w-9 text-right text-[11px] text-slate-300 tabular-nums">${(v||0).toFixed(2)}</span>
+  </div>`;
+}
+
+async function loadCases(){
+  const r = await fetch("/api/cases"); const {cases} = await r.json();
+  $("caseSelect").innerHTML = cases.map(c=>{
+    const truth = c.true_stage ? `${c.true_stage}${c.true_etiologies.length? '/'+c.true_etiologies.join('+'):''}` : '—';
+    return `<option value="${c.subject}">${c.id} · ${c.demo} · truth ${truth}${c.has_t1?'':' · no T1'}</option>`;
+  }).join("");
+}
+
+async function run(){
+  const subj = $("caseSelect").value;
+  $("runBtn").disabled = true; $("idle").classList.add("hidden");
+  $("errorBox").classList.add("hidden"); $("board").classList.add("hidden");
+  clearInterval(pollTimer);
+  renderStepper("screening", []);
+  try{
+    const r = await fetch(`/api/run?case=${encodeURIComponent(subj)}`, {method:"POST"});
+    if(!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    const {case_id, case:meta} = await r.json();
+    activeCaseId = case_id;
+    showCase(meta);
+    $("board").classList.remove("hidden");
+    pollTimer = setInterval(poll, 500); poll();
+  }catch(e){ showError("Failed to start: "+e.message); $("runBtn").disabled=false; }
+}
+
+function showCase(m){
+  const truth = m.true_stage ? `${m.true_stage}${m.true_etiologies.length?' / '+m.true_etiologies.join(', '):''}` : '—';
+  $("caseTitle").textContent = m.id;
+  $("caseId").textContent = activeCaseId;
+  const bits = [m.demo!=='—'?m.demo:null,
+    m.mmse!=null?`MMSE ${m.mmse}`:null,
+    m.apoe4!=null?`APOE ε4 ×${m.apoe4}`:null,
+    `${m.n_clinical} UDS vars`].filter(Boolean);
+  $("caseMeta").textContent = bits.join(" · ");
+  $("caseTruth").textContent = `Held-out truth (not shown to the model): ${truth}`;
+}
+
+async function poll(){
+  try{
+    const s = await (await fetch(`/api/status/${activeCaseId}`)).json();
+    renderStepper(s.stage, s.completed_tools);
+    if(s.stage === "failed"){ clearInterval(pollTimer); $("runBtn").disabled=false;
+      showError("Pipeline failed:\n\n"+(s.error||"unknown error")); return; }
+    if(s.stage === "complete"){ clearInterval(pollTimer); $("runBtn").disabled=false;
+      await loadEvidence(); await loadSlices(); }
+  }catch(e){ clearInterval(pollTimer); $("runBtn").disabled=false; showError(e.message); }
+}
+
+async function loadEvidence(){
+  const ev = await (await fetch(`/api/evidence/${activeCaseId}`)).json();
+  // Tier-1
+  const t = ev.tier1 || {};
+  $("stageBars").innerHTML = ["NC","MCI","DE"].map(k=>{
+    const v=(t.stage_probs||{})[k]; const hot = k===t.stage_top;
+    return bar(k, v, hot?"bg-sky-400":"bg-sky-700");
+  }).join("");
+  const etio = Object.entries(t.etiology_probs||{}).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  $("etioBars").innerHTML = etio.map(([k,v])=>{
+    const hot = k===t.etiology_top;
+    return bar(k, v, hot?"bg-amber-400":"bg-amber-700");
+  }).join("");
+  $("tier1Note").textContent = `${t.n_clinical_features||0} clinical features used · MRI embedding ${t.imaging_used?'used':'not used'}.`;
+
+  // Routing
+  const rt = ev.routing || {};
+  $("routeTools").innerHTML = (rt.selected_tools||[]).map(x=>
+    `<span class="bg-sky-900/60 border border-sky-700 text-sky-200 text-[11px] px-2 py-0.5 rounded">${x}</span>`
+  ).join("") || '<span class="text-[11px] text-slate-500">none</span>';
+  $("routeRules").innerHTML = (rt.fired_rules||[]).map(x=>`<li>• ${x}</li>`).join("");
+  $("routeRationale").textContent = rt.rationale || "";
+
+  // Pattern
+  const p = ev.pattern || {};
+  $("pattern").innerHTML = p.pattern_id ? `
+    <div class="font-semibold text-slate-100">Pattern ${p.pattern_id} — ${p.name}
+      <span class="text-[11px] text-slate-400 font-normal">(${p.confidence})</span></div>
+    <p class="text-[12px] text-slate-400 mt-1">${p.rationale||""}</p>` : '<span class="text-slate-500 text-sm">—</span>';
+
+  // Conflicts
+  const sev = {info:"border-slate-600 text-slate-300", caution:"border-amber-600 text-amber-300",
+               important:"border-rose-600 text-rose-300"};
+  const cf = ev.conflicts || [];
+  $("conflicts").innerHTML = cf.length ? cf.map(c=>`
+    <div class="border-l-2 pl-2 ${sev[c.severity]||sev.caution}">
+      <div class="text-sm font-medium">${c.name} <span class="text-[10px] uppercase">[${c.severity}]</span></div>
+      <div class="text-[11px] text-slate-400">${c.description}</div>
+    </div>`).join("") : '<div class="text-sm text-slate-500">No internal conflicts detected.</div>';
+
+  // Tier-2 cards
+  $("tier2Cards").innerHTML = renderTier2(ev.tier2||{});
+
+  // Report
+  const rep = ev.report || {};
+  $("report").innerHTML = window.marked ? marked.parse(rep.markdown||"") :
+    `<pre class="whitespace-pre-wrap text-slate-300">${(rep.markdown||"").replace(/</g,"&lt;")}</pre>`;
+  const ok = rep.self_check_passed;
+  $("selfCheck").innerHTML = ok
+    ? `<span class="text-emerald-400">✓ self-check passed · ${rep.iterations} iter</span>`
+    : `<span class="text-amber-400">⚠ unresolved after ${rep.iterations} iter</span>`;
+}
+
+function badge(src){
+  return src==="synthetic"
+    ? '<span class="bg-amber-900/60 border border-amber-700 text-amber-300 text-[10px] px-1.5 py-0.5 rounded">synthetic placeholder</span>'
+    : '<span class="bg-emerald-900/60 border border-emerald-700 text-emerald-300 text-[10px] px-1.5 py-0.5 rounded">model</span>';
+}
+function card(title, src, rows){
+  return `<div class="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
+    <div class="flex items-center justify-between mb-1.5">
+      <span class="text-sm font-semibold text-slate-200">${title}</span>${badge(src)}</div>
+    <div class="text-[12px] text-slate-300 space-y-0.5">${rows.map(r=>`<div>${r}</div>`).join("")}</div></div>`;
+}
+function renderTier2(t2){
+  const out = [];
+  if(t2.centiloid){ const c=t2.centiloid;
+    out.push(card("Amyloid PET · MYGO-Centiloid", c.source, [
+      `Centiloid <b>${c.centiloid}</b> (≥ ${c.threshold} positive) → <b class="${c.positive?'text-rose-300':'text-emerald-300'}">${c.positive?'positive':'negative'}</b>`,
+      c.cortical_suvr!=null?`Cortical SUVR ${c.cortical_suvr}`:null,
+      `<span class="text-slate-500">${c.reference}</span>`].filter(Boolean))); }
+  if(t2.epvs){ const e=t2.epvs;
+    out.push(card("Perivascular spaces · MUJICA", e.source, [
+      `Total ${e.total_volume_mm3} mm³ (BG ${e.bg_volume_mm3}, CSO ${e.cso_volume_mm3})`,
+      `${e.distribution} · burden grade ${e.burden_grade}/4`,
+      `<span class="text-slate-500">${e.reference}</span>`])); }
+  if(t2.anatomy){ const a=t2.anatomy;
+    const z = a.hippocampus_zscore==null?'n/a':a.hippocampus_zscore;
+    out.push(card("Structural · MONAI wholeBrainSeg", a.source, [
+      `Hippocampus ${a.hippocampus_total_mm3?a.hippocampus_total_mm3.toFixed(0)+' mm³':'n/a'}, Z ${z} (≤ ${a.atrophy_zscore_threshold} atrophy)`,
+      `Ventricular index ${a.ventricular_index==null?'n/a':a.ventricular_index} · dominant atrophy ${a.dominant_atrophy}`,
+      `${a.n_labels} structures · <span class="text-slate-500">${a.reference}</span>`])); }
+  return out.join("") || '<div class="text-sm text-slate-500">No imaging tools returned evidence.</div>';
+}
+
+async function loadSlices(){
+  const meta = await (await fetch(`/api/slices/${activeCaseId}`)).json();
+  const slices = meta.slices || [];
+  if(!slices.length){
+    $("sliceGrid").innerHTML = '<div class="col-span-3 text-sm text-slate-500">No T1 volume supplied for this case.</div>';
+    return;
+  }
+  $("sliceGrid").innerHTML = slices.map(s=>`
+    <figure class="bg-slate-950/50 border border-slate-800 rounded-lg p-2">
+      <div class="text-[11px] text-slate-400 mb-1">${s.title}</div>
+      ${s.url
+        ? `<img src="${s.url}?t=${activeCaseId}" class="rounded w-full bg-slate-950" alt="${s.plane} view" loading="lazy">`
+        : `<div class="aspect-square grid place-items-center text-slate-600 text-xs rounded bg-slate-950">no T1</div>`}
+      <figcaption class="mt-1.5 text-[11px] text-slate-300 leading-snug">${s.caption}</figcaption>
+    </figure>`).join("");
+}
+
+function showError(msg){ const b=$("errorBox"); b.textContent=msg; b.classList.remove("hidden"); }
+
+document.querySelectorAll(".signoff").forEach(b=>b.onclick=()=>{
+  const m = {agree:"Draft signed by clinician — recorded outside this tool (demo: not persisted).",
+             edit:"Edit mode — the clinician revises before signing (demo).",
+             disagree:"Marked as disagreed — draft discarded, nothing committed (demo)."};
+  toast(m[b.dataset.act]);
+});
+$("runBtn").onclick = run;
+loadCases();
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+# ADRD nmed2024 tool — runtime requirements.
+# Tested versions are noted; >= is used so the tool survives migration.
+# (The vendored `adrd` package is included under assets/, not pip-installed.)
+
+# --- core inference ---
+torch>=2.1            # tested 2.12.0
+numpy>=1.24           # tested 2.4.6
+pandas>=1.5.3         # tested 3.0.3
+scikit-learn>=1.2.2   # adrd uses sklearn BaseEstimator / metrics
+scipy>=1.10
+tqdm>=4.62
+
+# --- imaging: raw-NIfTI -> SwinUNETR embedding (optional path) ---
+monai>=1.1            # tested 1.5.2
+nibabel>=5.0          # tested 5.4.2
+einops                # required by MONAI SwinUNETR in 1.5+
+
+# --- heatmap rendering (optional; matrix data is returned without these) ---
+matplotlib>=3.7.2
+seaborn>=0.12
+
+# --- pulled in transitively by the adrd package import chain ---
+icecream
