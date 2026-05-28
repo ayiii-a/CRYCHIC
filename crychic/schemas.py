@@ -6,9 +6,8 @@ One validated model per pipeline stage, in execution order:
     Tier1Result        Stage 1  clinical screening (Xue 2024)
     RoutingDecision    Stage 2  which imaging tools the rules selected
     CentiloidResult    Stage 3  MYGO amyloid-PET quantification
-    EPVSResult         Stage 3  MUJICA enlarged perivascular spaces
     AnatomyResult      Stage 3  MONAI wholeBrainSeg structural metrics
-    Tier2Result        Stage 3  the three imaging results, bundled
+    Tier2Result        Stage 3  the imaging results, bundled
     ClinicalPattern    Stage 4  matched AD-spectrum pattern (1 of 6)
     Conflict           Stage 4  surfaced evidence conflict (never overridden)
     CrychicReport      Stage 5  the signed-off-able Markdown draft
@@ -107,7 +106,6 @@ class Tier1Result(BaseModel):
 
 class ToolName(str, Enum):
     CENTILOID = "centiloid"   # MYGO amyloid-PET quantification
-    MUJICA = "mujica"         # EPVS segmentation
     MONAI = "monai"           # wholeBrainSeg anatomy
 
 
@@ -146,21 +144,6 @@ class CentiloidResult(BaseModel):
     caveats: list[str] = Field(default_factory=list)
 
 
-class EPVSResult(BaseModel):
-    """MUJICA: enlarged perivascular space segmentation (glymphatic / SVD marker)."""
-
-    total_volume_mm3: float
-    bg_volume_mm3: float = Field(..., description="Basal ganglia EPVS volume.")
-    cso_volume_mm3: float = Field(..., description="Centrum semiovale EPVS volume.")
-    distribution: str = Field(
-        ..., description="Dominant distribution: 'BG-predominant' | 'CSO-predominant' | 'mixed'."
-    )
-    burden_grade: int = Field(..., ge=0, le=4, description="0–4 ordinal EPVS burden.")
-    source: ImagingSource = ImagingSource.MODEL
-    reference: str = "Wardlaw STRIVE (SVD imaging standards); CSO-predominance is a CAA surrogate (Boston v2.0)."
-    caveats: list[str] = Field(default_factory=list)
-
-
 class AnatomyResult(BaseModel):
     """MONAI wholeBrainSeg: structural metrics derived from a T1 segmentation."""
 
@@ -189,7 +172,6 @@ class Tier2Result(BaseModel):
     """The Stage-3 imaging bundle. Each tool is optional (gated by the router)."""
 
     centiloid: CentiloidResult | None = None
-    epvs: EPVSResult | None = None
     anatomy: AnatomyResult | None = None
 
     @property

@@ -36,14 +36,12 @@ P_FTD_ELEVATED = 0.30
 P_PSY_ELEVATED = 0.30
 HIPPO_Z_ATROPHY = -1.5      # ≤ this = significant medial-temporal atrophy
 HIPPO_Z_BENIGN = -1.0       # > this = no meaningful hippocampal atrophy
-EPVS_GRADE_HIGH = 3         # ordinal burden at/above which vascular load is notable
 CENTILOID_POS = 20.0        # GAAIN positivity (Klunk 2015)
 
 
 def _read(tier1: Tier1Result, tier2: Tier2Result) -> dict:
     """Flatten the handful of values the rules read, with safe defaults."""
     c = tier2.centiloid
-    e = tier2.epvs
     a = tier2.anatomy
     return {
         "p_ad": tier1.p_ad,
@@ -58,9 +56,6 @@ def _read(tier1: Tier1Result, tier2: Tier2Result) -> dict:
         "centiloid": (c.centiloid if c is not None else None),
         "hippo_z": (a.hippocampus_zscore if a is not None else None),
         "atrophy": (a.dominant_atrophy if a is not None else "none"),
-        "cso_pred": (e.distribution == "CSO-predominant" if e is not None else False),
-        "epvs_grade": (e.burden_grade if e is not None else 0),
-        "epvs_dist": (e.distribution if e is not None else None),
     }
 
 
@@ -69,40 +64,22 @@ def _read(tier1: Tier1Result, tier2: Tier2Result) -> dict:
 # ============================================================================ #
 
 def match_clinical_pattern(tier1: Tier1Result, tier2: Tier2Result) -> ClinicalPattern:
-    """Map the combined evidence onto one of 6 AD-spectrum patterns."""
+    """Map the combined evidence onto one of the AD-spectrum patterns."""
     v = _read(tier1, tier2)
     has_atrophy = v["hippo_z"] is not None and v["hippo_z"] <= HIPPO_Z_ATROPHY
-    vascular = (v["p_vd"] >= P_VD_ELEVATED) or (v["epvs_grade"] >= EPVS_GRADE_HIGH)
-
-    # 4 — CAA-predominant / vascular-amyloid (most specific signature first).
-    if v["cso_pred"] and v["epvs_grade"] >= 2:
-        ev = [
-            f"EPVS distribution CSO-predominant (grade {v['epvs_grade']}/4) — "
-            f"centrum-semiovale predominance is a CAA surrogate (Boston v2.0).",
-        ]
-        if v["amyloid_pos"]:
-            ev.append(f"Amyloid-positive (Centiloid {v['centiloid']} ≥ {CENTILOID_POS}).")
-        return ClinicalPattern(
-            pattern_id=4,
-            name="CAA-predominant / vascular-amyloid signature",
-            rationale="Centrum-semiovale EPVS predominance suggests a cerebral "
-                      "amyloid angiopathy contribution; SWI confirmation is required "
-                      "for Boston v2.0 scoring (not available in v0.3).",
-            supporting_evidence=ev,
-            confidence="moderate",
-        )
+    vascular = v["p_vd"] >= P_VD_ELEVATED
 
     # 3 — Mixed AD + cerebrovascular.
     if v["amyloid_pos"] and vascular:
         return ClinicalPattern(
             pattern_id=3,
             name="Mixed AD + cerebrovascular",
-            rationale="Amyloid positivity alongside a vascular burden indicates a "
-                      "mixed substrate; cognitive impairment is likely multifactorial.",
+            rationale="Amyloid positivity alongside a Tier-1 vascular signal "
+                      "indicates a mixed substrate; cognitive impairment is "
+                      "likely multifactorial.",
             supporting_evidence=[
                 f"Amyloid-positive (Centiloid {v['centiloid']} ≥ {CENTILOID_POS}).",
-                f"Vascular load: P(VD)={v['p_vd']:.2f} (≥{P_VD_ELEVATED}) "
-                f"and/or EPVS grade {v['epvs_grade']}/4 (≥{EPVS_GRADE_HIGH}).",
+                f"Vascular load: P(VD)={v['p_vd']:.2f} (≥{P_VD_ELEVATED}).",
             ],
             confidence="moderate",
         )
@@ -233,8 +210,8 @@ def detect_conflicts(tier1: Tier1Result, tier2: Tier2Result) -> list[Conflict]:
             ],
         ))
 
-    # Mixed amyloid + vascular burden.
-    if v["amyloid_pos"] is True and (v["p_vd"] >= P_VD_ELEVATED or v["epvs_grade"] >= EPVS_GRADE_HIGH):
+    # Mixed amyloid + vascular burden (Tier-1 signal only).
+    if v["amyloid_pos"] is True and v["p_vd"] >= P_VD_ELEVATED:
         conflicts.append(Conflict(
             conflict_id="vascular_amyloid_overlap",
             name="Concurrent amyloid and vascular burden",
@@ -244,7 +221,7 @@ def detect_conflicts(tier1: Tier1Result, tier2: Tier2Result) -> list[Conflict]:
             severity=ConflictSeverity.CAUTION,
             evidence=[
                 f"Centiloid {v['centiloid']} ≥ {CENTILOID_POS} (amyloid-positive).",
-                f"P(VD)={v['p_vd']:.2f} and/or EPVS grade {v['epvs_grade']}/4.",
+                f"P(VD)={v['p_vd']:.2f} (≥{P_VD_ELEVATED}).",
             ],
         ))
 
@@ -252,19 +229,18 @@ def detect_conflicts(tier1: Tier1Result, tier2: Tier2Result) -> list[Conflict]:
     benign_imaging = (
         v["amyloid_pos"] is not True
         and (v["hippo_z"] is None or v["hippo_z"] > HIPPO_Z_BENIGN)
-        and v["epvs_grade"] < EPVS_GRADE_HIGH
     )
     if v["stage"] == "DE" and benign_imaging:
         conflicts.append(Conflict(
             conflict_id="severity_imaging_mismatch",
             name="Clinical severity exceeds imaging burden",
-            description="A dementia-level clinical stage is not matched by amyloid, "
-                        "structural, or vascular findings. Consider non-degenerative "
+            description="A dementia-level clinical stage is not matched by amyloid "
+                        "or structural findings. Consider non-degenerative "
                         "contributors (mood, metabolic, medication) and follow-up.",
             severity=ConflictSeverity.CAUTION,
             evidence=[
                 f"Stage {v['stage']} with benign imaging "
-                f"(hippocampal Z {v['hippo_z']}, EPVS grade {v['epvs_grade']}/4, "
+                f"(hippocampal Z {v['hippo_z']}, "
                 f"amyloid {'negative' if v['amyloid_known'] else 'unknown'}).",
             ],
         ))

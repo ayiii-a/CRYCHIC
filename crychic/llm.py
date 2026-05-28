@@ -196,11 +196,6 @@ def _evidence_brief(ctx: ReportContext) -> str:
         c = t2.centiloid
         lines.append(f"CENTILOID: {c.centiloid} (≥{c.threshold} positive → "
                      f"{c.positive}); source={c.source.value}; ref={c.reference}")
-    if t2.epvs:
-        e = t2.epvs
-        lines.append(f"EPVS: total={e.total_volume_mm3}mm³ BG={e.bg_volume_mm3} "
-                     f"CSO={e.cso_volume_mm3}; {e.distribution}; grade {e.burden_grade}/4; "
-                     f"source={e.source.value}; ref={e.reference}")
     if t2.anatomy:
         a = t2.anatomy
         lines.append(f"ANATOMY: hippo_total={a.hippocampus_total_mm3}mm³ "
@@ -415,13 +410,6 @@ def _fmt_t2(t2: Tier2Result) -> list[str]:
             f"- **Amyloid PET (MYGO-Centiloid):** Centiloid **{c.centiloid}** "
             f"(positivity threshold ≥ {c.threshold}; {c.reference}) → "
             f"{'amyloid-positive' if c.positive else 'amyloid-negative'}{tag}.")
-    if t2.epvs:
-        e = t2.epvs
-        tag = " *(synthetic placeholder)*" if e.source.value == "synthetic" else ""
-        out.append(
-            f"- **Perivascular spaces (MUJICA):** total {e.total_volume_mm3} mm³ "
-            f"(BG {e.bg_volume_mm3}, CSO {e.cso_volume_mm3}); {e.distribution}; "
-            f"burden grade {e.burden_grade}/4 (≥ 3 = high; {e.reference}){tag}.")
     if t2.anatomy:
         a = t2.anatomy
         z = "n/a" if a.hippocampus_zscore is None else a.hippocampus_zscore
@@ -446,7 +434,7 @@ def _fmt_differential(ctx: ReportContext) -> list[str]:
     out += [
         "○ A non-AD neurodegenerative process (e.g. FTD-spectrum, LATE) if the "
         "clinical course or atrophy emphasis diverges from the amyloid status.",
-        "○ A vascular or mixed contribution, given perivascular-space burden.",
+        "○ A vascular or mixed contribution, given the Tier-1 P(VD) signal.",
         "○ A reversible/functional contributor (mood, metabolic, medication) "
         "pending longitudinal follow-up.",
     ]
@@ -458,13 +446,11 @@ def _limitations(ctx: ReportContext) -> list[str]:
     if ctx.tier2.centiloid is None or ctx.tier2.centiloid.source.value == "synthetic":
         lim.append("- Amyloid burden is a synthetic placeholder / no PET was "
                    "quantified — amyloid status is not measured here.")
-    if ctx.tier2.epvs and ctx.tier2.epvs.source.value == "synthetic":
-        lim.append("- EPVS volumes are a synthetic placeholder, not segmented.")
     lim += [
         "- No Tau PET input — tau trajectory subtypes cannot be distinguished.",
         "- No DaTscan / α-syn SAA — LBD comorbidity can be suggested, not confirmed.",
-        "- No SWI segmentation in v0.3 — a CAA signature is inferred from CSO-EPVS "
-        "pattern only; Boston v2.0 scoring still needs manual SWI review.",
+        "- No SWI or perivascular-space segmentation in v0.3 — CAA / vascular "
+        "burden is only assessed via the Tier-1 P(VD) signal.",
         "- Single timepoint — pseudodementia cannot be fully excluded without "
         "longitudinal follow-up.",
         "- The Tier-1 model was trained on NACC; distribution shift applies to "

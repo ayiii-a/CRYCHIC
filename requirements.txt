@@ -21,6 +21,9 @@ nibabel>=5.0
 numpy>=1.24
 pandas>=2.0
 
+# --- MYGO-Centiloid (amyloid-PET regressor; not on PyPI) ---
+mygo_centiloid @ git+https://github.com/JimmyToluene/MYGO-Centiloid.git@master
+
 # --- optional: attribution heatmap PNG (best-effort in adrd_tool) ---
 matplotlib>=3.7
 seaborn>=0.12

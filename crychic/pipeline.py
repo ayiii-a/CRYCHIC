@@ -53,8 +53,6 @@ _TASKS: set[asyncio.Task] = set()
 # Routing thresholds (CLAUDE.md §2.3).
 P_AD_CENTILOID = 0.30
 P_MCI_CENTILOID = 0.40
-P_VD_MUJICA = 0.20
-P_AD_MUJICA = 0.50
 
 
 def _max_iter() -> int:
@@ -82,6 +80,7 @@ async def run_pipeline(state: CaseState) -> None:
     try:
         state.set_stage(Stage.SCREENING)
         state.tier1 = await _run_tier1(state.inputs)
+        state.mark_tool_done("xue_nmed2024")
 
         state.set_stage(Stage.ROUTING)
         state.routing = _route(state.tier1, state.inputs)
@@ -143,12 +142,6 @@ def _route(tier1: Tier1Result, inputs: CaseInputs) -> RoutingDecision:
             f"P(AD)={tier1.p_ad:.2f}≥{P_AD_CENTILOID} or "
             f"P(MCI)={tier1.p_mci:.2f}≥{P_MCI_CENTILOID} → centiloid"
         )
-    if tier1.p_vd >= P_VD_MUJICA or tier1.p_ad >= P_AD_MUJICA:
-        selected.append(ToolName.MUJICA)
-        fired.append(
-            f"P(VD)={tier1.p_vd:.2f}≥{P_VD_MUJICA} or "
-            f"P(AD)={tier1.p_ad:.2f}≥{P_AD_MUJICA} → mujica"
-        )
     # MONAI always — when a structural T1 is available to segment.
     if inputs.t1_path:
         selected.append(ToolName.MONAI)
@@ -170,8 +163,6 @@ async def _run_imaging(state: CaseState) -> Tier2Result:
     seed = t1r.input_id or state.case_id
 
     amyloid_prior = max(t1r.p_ad, t1r.p_mci)
-    vascular_prior = t1r.p_vd
-    caa_prior = max(t1r.p_vd, 0.5 * t1r.p_ad)
 
     async def _centiloid():
         if ToolName.CENTILOID not in selected:
@@ -181,15 +172,6 @@ async def _run_imaging(state: CaseState) -> Tier2Result:
         state.mark_tool_done("centiloid")
         return r
 
-    async def _mujica():
-        if ToolName.MUJICA not in selected:
-            return None
-        r = await t2.run_epvs_async(
-            inp.t1_path, vascular_prior=vascular_prior, caa_prior=caa_prior,
-            seed_key=seed)
-        state.mark_tool_done("mujica")
-        return r
-
     async def _monai():
         if ToolName.MONAI not in selected or not inp.t1_path:
             return None
@@ -197,10 +179,10 @@ async def _run_imaging(state: CaseState) -> Tier2Result:
         state.mark_tool_done("monai")
         return r
 
-    centiloid, epvs, anatomy = await asyncio.gather(
-        _guard(_centiloid()), _guard(_mujica()), _guard(_monai())
+    centiloid, anatomy = await asyncio.gather(
+        _guard(_centiloid()), _guard(_monai())
     )
-    return Tier2Result(centiloid=centiloid, epvs=epvs, anatomy=anatomy)
+    return Tier2Result(centiloid=centiloid, anatomy=anatomy)
 
 
 async def _guard(coro):

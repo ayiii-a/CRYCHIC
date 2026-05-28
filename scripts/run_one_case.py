@@ -41,12 +41,29 @@ from crychic.pipeline import start_pipeline
 from crychic.state import CaseInputs
 
 _PREPRO = _REPO_ROOT / "data" / "mri_prepro"
+_PET_NPY = _REPO_ROOT / "data" / "pet_npy"
 
 
 def _find_t1(subject: str) -> Path | None:
     """The skull-stripped, MNI-registered T1 for this subject (MONAI input)."""
     hits = sorted(_PREPRO.glob(f"{subject}_*_stripped_MNI.nii.gz"))
     return hits[0] if hits else None
+
+
+def _find_pet(subject: str) -> tuple[Path, str] | None:
+    """The preprocessed amyloid-PET npy + tracer label for this subject, or None.
+
+    Files are named ``<subject>_<TRACER>_<day>.npy`` (see
+    ``scripts/preprocess_pet.py``). The tracer is whichever MYGO label the
+    preprocessor canonicalized to (``AV45`` is rewritten to ``FBP``).
+    """
+    hits = sorted(_PET_NPY.glob(f"{subject}_*.npy"))
+    if not hits:
+        return None
+    name = hits[0].stem            # e.g. OAS30209_PIB_d1971
+    parts = name.split("_")
+    tracer = parts[1] if len(parts) >= 3 else ""
+    return hits[0], tracer
 
 
 async def _preflight() -> None:
@@ -74,7 +91,7 @@ async def _preflight() -> None:
               "LLM steps. Fix NEMOTRON_URL / NEMOTRON_API_KEY to test the LLM.\n")
 
 
-async def run(case_filter: str | None, use_t1: bool) -> int:
+async def run(case_filter: str | None, use_t1: bool, use_pet: bool) -> int:
     cases = load_demo_cases()
     if case_filter:
         cases = [c for c in cases
@@ -85,18 +102,26 @@ async def run(case_filter: str | None, use_t1: bool) -> int:
     case = cases[0]
 
     t1 = _find_t1(case.subject) if use_t1 else None
+    pet_info = _find_pet(case.subject) if use_pet else None
+    pet_path, pet_tracer = (pet_info if pet_info else (None, None))
+
     print(f"CASE {case.id}  (subject {case.subject})")
     print(f"  truth     : stage={case.true_stage}  "
           f"etiologies={case.true_etiologies or '-'}")
     print(f"  clinical  : {len(case.clinical)} UDS variables")
     print(f"  embedding : {case.embedding_path}")
-    print(f"  T1 (MONAI): {t1 if t1 else '(skipped)'}\n")
+    print(f"  T1 (MONAI): {t1 if t1 else '(skipped)'}")
+    print(f"  PET (MYGO): {pet_path} [{pet_tracer}]" if pet_path
+          else "  PET (MYGO): (skipped)")
+    print()
 
     await _preflight()
 
     inputs = CaseInputs(
         clinical=case.clinical,
         t1_path=str(t1) if t1 else None,
+        pet_path=str(pet_path) if pet_path else None,
+        tracer=pet_tracer,
         mri_embedding_path=str(case.embedding_path) if case.embedding_path else None,
     )
     state = start_pipeline(inputs)
@@ -129,6 +154,15 @@ async def run(case_filter: str | None, use_t1: bool) -> int:
     for c in ev.conflicts or []:
         print(f"  conflict: [{c.severity.value}] {c.name}")
 
+    if ev.tier2 and ev.tier2.centiloid:
+        cl = ev.tier2.centiloid
+        print("\n── Tier-2 Centiloid ────────────────────────────────────")
+        print(f"  source={cl.source.value}  tracer={cl.tracer}  "
+              f"centiloid={cl.centiloid}  positive={cl.positive} "
+              f"(≥{cl.threshold})")
+        for c in cl.caveats:
+            print(f"  caveat: {c}")
+
     rep = ev.report
     print(f"\n  self_check_passed={rep.self_check_passed}  "
           f"iterations={rep.iterations}")
@@ -153,8 +187,10 @@ def main() -> int:
                          "Default: first case in the cohort.")
     ap.add_argument("--no-t1", action="store_true",
                     help="skip the MONAI T1 step (clinical + synthetic imaging).")
+    ap.add_argument("--no-pet", action="store_true",
+                    help="skip the MYGO PET step (centiloid falls back to synthetic).")
     args = ap.parse_args()
-    return asyncio.run(run(args.case, use_t1=not args.no_t1))
+    return asyncio.run(run(args.case, use_t1=not args.no_t1, use_pet=not args.no_pet))
 
 
 if __name__ == "__main__":

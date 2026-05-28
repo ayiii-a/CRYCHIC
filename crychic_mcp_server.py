@@ -94,7 +94,7 @@ def get_case_evidence(
 
     ``fields`` selects a subset of ``tier1``, ``routing``, ``tier2``, ``pattern``,
     ``conflicts``, ``report``; omit it to get everything available so far. Useful
-    for follow-up questions ("show me the EPVS breakdown") with no pipeline
+    for follow-up questions ("what was the Centiloid value?") with no pipeline
     re-run. Note evidence fills in stage by stage — poll status for completion.
     """
     state = STORE.get(case_id)
