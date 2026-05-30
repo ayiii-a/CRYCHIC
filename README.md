@@ -1,4 +1,4 @@
-# CRYCHIC-MCP
+# CRYCHIC
 
 > **CRYCHIC**: multi-modal dementia clinical decision support.
 > Submission for the Healthcare Agentic AI Hackathon (Harvard Innovation Labs, 2026-05-30).
