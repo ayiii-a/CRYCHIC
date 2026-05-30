@@ -31,7 +31,7 @@
       <span class="text-4xl">⚕️</span>
       <div>
         <div class="font-bold text-3xl leading-tight">CRYCHIC</div>
-        <div class="text-sm text-slate-400">Clinical Decision Support — not a diagnostic device</div>
+        <div class="text-sm text-slate-400">Agentic Clinical Decision Support for Alzheimer's Disease</div>
       </div>
     </div>
     <div class="flex-1"></div>
@@ -39,8 +39,8 @@
       <div id="agentStatus" class="text-[11px] text-slate-400 flex items-center gap-1.5 whitespace-nowrap"></div>
       <div class="flex items-center gap-3">
         <select id="caseSelect" class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm min-w-[16rem]"></select>
-        <button id="runBtn" class="bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed
-                px-4 py-1.5 rounded-lg text-sm font-semibold transition">Run pipeline</button>
+        <button id="loadBtn" class="bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed
+                px-4 py-1.5 rounded-lg text-sm font-semibold transition">Load subject</button>
       </div>
     </div>
   </div>
@@ -48,8 +48,11 @@
 
 <main class="max-w-7xl mx-auto px-5 py-5">
   <div id="idle" class="text-center text-slate-500 py-24">
-    Pick a case and press <span class="text-sky-400 font-semibold">Run pipeline</span> to organize its evidence.
+    Pick a subject and press <span class="text-sky-400 font-semibold">Load subject</span> to review it before running.
   </div>
+
+  <!-- ── Pre-run review — loaded subject data, then Run pipeline ──────────── -->
+  <div id="review" class="hidden max-w-3xl mx-auto"></div>
 
   <!-- ── Running view — big, centered, live activity log ─────────────────── -->
   <div id="runView" class="hidden min-h-[62vh] flex items-center justify-center">
@@ -290,9 +293,79 @@ async function loadCases(){
   }).join("");
 }
 
+// ── Pre-run review: load a subject's bundled record, show it, then Run ──────
+const FIELD_LABELS = {
+  EDUC: "Education (years)", NACCAGE: "Age (years)", HACHIN: "Hachinski ischemic score",
+  NACCMMSE: "MMSE total (0–30)", NACCNE4S: "APOE ε4 alleles (0/1/2)", SEX: "Sex (1=M, 2=F)",
+};
+function reviewInput(label, value, ro){
+  return `<label class="block">
+    <span class="text-[10px] uppercase tracking-wide text-slate-500">${esc(label)}</span>
+    <input value="${esc(value==null?'':String(value))}" ${ro?'readonly':''}
+      class="mt-0.5 w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm ${ro?'text-slate-400':'text-slate-200'}"></label>`;
+}
+function reviewFile(label, path, hint){
+  const body = path ? esc(path) : `<span class="italic text-slate-600">${esc(hint)}</span>`;
+  return `<div><div class="text-[10px] uppercase tracking-wide text-slate-500">${esc(label)}</div>
+    <div class="mt-0.5 bg-slate-950/60 border border-slate-800 rounded px-2 py-1 text-[11px] font-mono text-slate-400 break-all">${body}</div></div>`;
+}
+function renderReview(m){
+  const truth = m.true_stage ? `${m.true_stage}${(m.true_etiologies||[]).length?' / '+m.true_etiologies.join(', '):''}` : '—';
+  const subjInfo = [
+    reviewInput("Subject ID", m.subject), reviewInput("Age at visit (years)", m.age),
+    reviewInput("Sex", m.sex), reviewInput("Education (years)", m.educ),
+  ].join("");
+  const f = m.files || {};
+  $("review").innerHTML = `
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-6">
+      <div>
+        <h2 class="text-lg font-bold text-slate-100">Review subject — ${esc(m.id)}</h2>
+        <p class="text-[11px] text-slate-500 mt-0.5">Held-out truth (not shown to the model): ${esc(truth)}. Fields are shown for review; the pipeline runs on the bundled record — edits here are not sent to the model.</p>
+      </div>
+      <section>
+        <h3 class="text-xs uppercase tracking-wide text-slate-400 mb-2">Subject information</h3>
+        <div class="grid grid-cols-2 gap-3">${subjInfo}</div>
+      </section>
+      <section>
+        <h3 class="text-xs uppercase tracking-wide text-slate-400 mb-2">Clinical note</h3>
+        <textarea rows="4" class="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm text-slate-200 leading-relaxed resize-y">${esc(m.note||"")}</textarea>
+        <p class="text-[10px] text-slate-500 mt-1">In an agentic workflow the <b>S1 extract agent</b> reads this free-text note and parses it into the structured UDS variables the screening model needs — that's the agentic step made visible.</p>
+      </section>
+      <section>
+        <h3 class="text-xs uppercase tracking-wide text-slate-400 mb-2">Related image files (read-only)</h3>
+        <div class="space-y-2">
+          ${reviewFile("T1 (MONAI segmentation)", f.t1, "none — structural axes abstain")}
+          ${reviewFile("FLAIR (VD / WMH axis)", f.flair, "none — VD axis abstains")}
+          ${reviewFile("MRI embedding (multimodal Xue)", f.emb, "none — clinical-only differential")}
+        </div>
+      </section>
+      <div class="pt-1">
+        <button id="runBtn" class="bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed
+                px-5 py-2 rounded-lg text-sm font-semibold transition">Run pipeline</button>
+      </div>
+    </div>`;
+  $("runBtn").onclick = run;   // the button is recreated on each load, so rebind here
+}
+
+async function loadSubject(){
+  const subj = $("caseSelect").value;
+  if(!subj) return;
+  $("loadBtn").disabled = true;
+  ["idle","board","runView","pipelineTab","reportCard","errorBox","review"]
+    .forEach(id=>$(id).classList.add("hidden"));
+  try{
+    const r = await fetch(`/api/subject/${encodeURIComponent(subj)}`);
+    if(!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    renderReview(await r.json());
+    $("review").classList.remove("hidden");
+  }catch(e){ showError("Failed to load subject: "+e.message); }
+  finally{ $("loadBtn").disabled = false; }
+}
+
 async function run(){
   const subj = $("caseSelect").value;
   $("runBtn").disabled = true; $("idle").classList.add("hidden");
+  $("review").classList.add("hidden");            // leave the review screen
   $("errorBox").classList.add("hidden"); $("board").classList.add("hidden");
   $("reportCard").classList.add("hidden");        // hide last run's report
   $("pipelineTab").classList.add("hidden");        // hide last run's collapsed pipeline
@@ -535,7 +608,7 @@ function renderCard(c){
 
 function showError(msg){ const b=$("errorBox"); b.textContent=msg; b.classList.remove("hidden"); }
 
-$("runBtn").onclick = run;
+$("loadBtn").onclick = loadSubject;   // header: Load shows the review screen; Run lives there
 loadCases();
 loadAgent();
 </script>

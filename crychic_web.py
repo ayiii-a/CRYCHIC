@@ -61,6 +61,44 @@ def _as_int(v: Any) -> int | None:
         return None
 
 
+def _jsonable(v: Any) -> Any:
+    """Coerce a pandas/numpy cell to a clean JSON value (27.0 → 27)."""
+    try:
+        f = float(v)
+        return int(f) if f.is_integer() else f
+    except (TypeError, ValueError):
+        return v
+
+
+def _clinical_note(clinical: dict) -> str:
+    """Compose the structured UDS variables into a free-text clinical note.
+
+    This is the kind of narrative a clinician writes — and exactly what the S1
+    extract *agent* parses back into structured variables. Surfacing it (instead of a
+    grid of cells) makes the agentic extraction step legible in the UI.
+    """
+    sex = {1: "man", 2: "woman"}.get(clinical.get("SEX"), "patient")
+    age = _as_int(clinical.get("NACCAGE"))
+    educ = _as_int(clinical.get("EDUC"))
+    mmse = _jsonable(clinical.get("NACCMMSE"))
+    apoe = _jsonable(clinical.get("NACCNE4S"))
+    hach = _jsonable(clinical.get("HACHIN"))
+
+    lead = f"A {age}-year-old {sex}" if age is not None else f"A {sex}"
+    if educ is not None:
+        lead += f" with {educ} years of formal education"
+    sents = [lead + " presents for cognitive evaluation."]
+    if mmse is not None:
+        sents.append(f"On bedside testing the Mini-Mental State Examination (MMSE) "
+                     f"score is {mmse} of 30.")
+    if apoe is not None:
+        sents.append(f"APOE genotyping shows {apoe} ε4 "
+                     f"{'allele' if apoe == 1 else 'alleles'}.")
+    if hach is not None:
+        sents.append(f"The Hachinski ischemic score is {hach}.")
+    return " ".join(sents)
+
+
 def _case_card(c) -> dict[str, Any]:
     age = c.clinical.get("NACCAGE")
     sex = _sex_letter(c.clinical)
@@ -108,6 +146,35 @@ def agent_status() -> dict[str, Any]:
 @app.get("/api/cases")
 def list_cases() -> dict[str, Any]:
     return {"cases": [_case_card(c) for c in load_demo_cases()]}
+
+
+@app.get("/api/subject/{subject}")
+def subject_detail(subject: str) -> dict[str, Any]:
+    """Full bundled record for one subject — for the pre-run review screen.
+
+    Clinical/subject fields are surfaced for review (the UI shows them editable, but
+    the pipeline still runs on this bundled record). Image paths are read-only.
+    """
+    matches = [c for c in load_demo_cases() if subject in c.id or subject in c.subject]
+    if not matches:
+        raise HTTPException(404, f"no demo case matching {subject!r}")
+    c = matches[0]
+    return {
+        "id": c.id,
+        "subject": c.subject,
+        "age": _as_int(c.clinical.get("NACCAGE")),
+        "sex": _sex_word(c.clinical),
+        "educ": _as_int(c.clinical.get("EDUC")),
+        "note": _clinical_note(c.clinical),
+        "clinical": {k: _jsonable(v) for k, v in c.clinical.items() if k != "ID"},
+        "files": {
+            "t1": find_t1(c.subject),
+            "flair": find_flair(c.subject),
+            "emb": find_emb(c.subject),
+        },
+        "true_stage": c.true_stage,
+        "true_etiologies": c.true_etiologies,
+    }
 
 
 @app.post("/api/run")
