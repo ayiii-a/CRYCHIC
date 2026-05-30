@@ -1,0 +1,45 @@
+# CRYCHIC — NeMo Agent Toolkit (NAT) workflow.
+#
+# Wires the agent (router S3 + reasoner S6) over the two local MCP compute servers
+# (CLAUDE.md §5). Run with:  nat run --config_file crychic/agent/workflow.yml --input cases/case_C.json
+#
+# ⚠ CAVEAT (CLAUDE.md §7): NAT function-registration boilerplate is VERSION-SPECIFIC.
+#   The `mcp_client` function-group config below is the stable part; the `workflow:`
+#   node schema and how crychic/agent/{router,reasoner}.py register as nodes differ
+#   across nvidia-nat releases — verify against your INSTALLED version's docs before
+#   trusting them. This file is provided for conformance with §5; the runnable path
+#   is the in-process spine (crychic/pipeline.py), which does NOT require NAT.
+#
+# Use the official MCP SDK server runtime for the servers (NOT nvidia-nat-fastmcp — §7).
+
+general:
+  use_uvloop: true
+
+llms:
+  nemotron:
+    _type: openai                                   # OpenAI-compatible (Nemotron NIM or proxy)
+    model_name: ${NEMOTRON_MODEL:-nvidia/nemotron-nano-9b-v2}
+    base_url: ${NEMOTRON_URL:-http://localhost:8000/v1}
+    api_key: ${NEMOTRON_API_KEY:-}
+
+functions:
+  # Deterministic compute only, exposed by the two localhost MCP servers (Inv #4, #10).
+  imaging_tools:
+    _type: mcp_client
+    transport: streamable-http
+    url: http://localhost:9901/mcp                  # segment_t1, derive_metric, wmh_fazekas, render_overlay
+  xue_tools:
+    _type: mcp_client
+    transport: streamable-http
+    url: http://localhost:9902/mcp                  # xue_predict
+
+workflow:
+  # The fixed CRYCHIC spine — exactly ONE LLM decision, the router (Inv #5);
+  # everything else executes in fixed order. Router and reasoner are agent nodes
+  # defined in crychic/agent/. Aggregation (S5) is plain code, not a tool/node.
+  _type: crychic_spine
+  llm: nemotron
+  tool_groups: [xue_tools, imaging_tools]
+  # Spine: S1 extract → S2 xue_predict → S3 route → S4 segment_t1/derive_metric/
+  #        wmh_fazekas + translate → S5 aggregate (plain code) → S6 reason +
+  #        self-check → S7 render.

@@ -1,24 +1,25 @@
-"""Stage orchestration — the async core the MCP tools fire and poll.
+"""The in-process spine — S1→S7 in fixed order (CLAUDE.md §3).
 
-``start_pipeline`` registers a case and launches :func:`run_pipeline` as a
-background task, so ``run_crychic_pipeline`` can return a ``case_id`` instantly
-while the work proceeds. The pipeline walks the documented stage sequence,
-updating the shared :class:`~crychic.state.CaseState` at each step:
+This is the runnable orchestrator the web UI and scripts use; it calls the same
+compute the MCP servers wrap (xue / segmentation / wmh) and the same agent logic
+the NAT workflow would (extract / router / reasoner), as plain Python — so a demo
+runs without spawning servers or a NAT install.
 
-    screening → routing → imaging (parallel) → aggregating → reasoning
-              → self_check_attempt_n ↔ revising_attempt_n → self_check_passed
-              → complete | failed
+The flow is a fixed spine with exactly one LLM decision (the router, S3); it is
+NOT a free-roaming ReAct loop (Inv #5):
+
+    extracting → screening → routing → imaging → translating → aggregating
+               → reasoning → self_check_attempt_n ↔ revising_attempt_n
+               → self_check_passed → complete | failed
 
 Design choices that matter:
 
-* **Imaging runs in parallel** via ``asyncio.gather``, and each tool is wrapped
-  so a single tool's failure becomes a caveat on that slot, not a dead case —
-  partial evidence still drives the aggregator and is surfaced as a limitation.
-* **Routing is rule-driven** (CLAUDE.md §2.3); the LLM only writes the prose
-  rationale. The execution path stays deterministic and auditable.
-* **The self-check loop is genuinely variable-length** — it stops when the
-  critic returns no violations, not after a fixed count (capped at
-  ``MAX_SELF_CHECK_ITER`` to bound latency).
+* **Blocking inference runs in worker threads** (``asyncio.to_thread``) so polling
+  stays responsive; results are assigned back on the loop thread.
+* **A tool failure becomes a caveat / an UNAVAILABLE metric, never a dead case** —
+  the missing axis surfaces as an honest abstain card, not a fabricated number.
+* **The self-check loop is genuinely variable-length** — it stops when the critic
+  returns no violations (capped by ``MAX_SELF_CHECK_ITER`` to bound latency).
 """
 
 from __future__ import annotations
@@ -26,17 +27,18 @@ from __future__ import annotations
 import asyncio
 import os
 import traceback
-from pathlib import Path
 
-from . import aggregator, llm
-from . import tier1_screening as t1
-from . import tier2_imaging as t2
+from . import aggregate, segmentation, wmh, xue
+from .agent import extract, reasoner, router
 from .schemas import (
+    CHECK_ETIOLOGY,
+    CHECK_MODALITY,
     CrychicReport,
-    RoutingDecision,
-    Tier1Result,
-    Tier2Result,
-    ToolName,
+    FindingCard,
+    ImagingCheck,
+    Metric,
+    MetricStatus,
+    Modality,
 )
 from .state import (
     STORE,
@@ -47,12 +49,9 @@ from .state import (
     self_check_stage,
 )
 
-# Keep references to background tasks so they are not garbage-collected.
-_TASKS: set[asyncio.Task] = set()
+_TASKS: set[asyncio.Task] = set()  # keep background tasks from being GC'd
 
-# Routing thresholds (CLAUDE.md §2.3).
-P_AD_CENTILOID = 0.30
-P_MCI_CENTILOID = 0.40
+_T1_CHECKS = {c for c, m in CHECK_MODALITY.items() if m is Modality.T1}
 
 
 def _max_iter() -> int:
@@ -76,23 +75,44 @@ def start_pipeline(inputs: CaseInputs) -> CaseState:
 
 
 async def run_pipeline(state: CaseState) -> None:
-    """Run the full pipeline for one case, recording progress on ``state``."""
+    """Run the full S1→S7 spine for one case, recording progress on ``state``."""
     try:
+        inp = state.inputs
+
+        # S1 — extract clinical features (LLM for prose; pass-through for a dict).
+        state.set_stage(Stage.EXTRACTING)
+        state.features = await extract.extract_features_async(inp.clinical)
+
+        # S2 — the differential (multimodal: clinical + MRI embedding when present).
         state.set_stage(Stage.SCREENING)
-        state.tier1 = await _run_tier1(state.inputs)
-        state.mark_tool_done("xue_nmed2024")
+        state.differential = await xue.screen_async(
+            state.features.features, mri=inp.mri_emb_path, explain=True)
+        state.differential.caveats += state.features.caveats
+        state.mark_tool_done("xue_predict")
 
+        # S3 — the one LLM decision: which imaging checks to dispatch.
         state.set_stage(Stage.ROUTING)
-        state.routing = _route(state.tier1, state.inputs)
-        state.routing.rationale = await llm.router_rationale(state.tier1, state.routing)
+        state.plan = await router.route(state.differential, inp.t1_path, inp.flair_path)
 
+        # S4a/b/c — imaging compute (segment once; derive each metric).
         state.set_stage(Stage.IMAGING)
-        state.tier2 = await _run_imaging(state)
+        age, sex = _age_sex(state.features.features)
+        metrics, tools, caveats = await asyncio.to_thread(
+            _run_imaging, state.plan, inp, age, sex)
+        for t in tools:
+            state.mark_tool_done(t)
+        state.differential.caveats += caveats
 
+        # S4d — translate metrics into guardrailed finding cards (+ abstain cards).
+        state.set_stage(Stage.TRANSLATING)
+        state.cards = await asyncio.to_thread(_translate_all, metrics, state.plan, inp)
+
+        # S5 — aggregate (plain code): merge, reconcile, conflicts, provenance.
         state.set_stage(Stage.AGGREGATING)
-        state.pattern = aggregator.match_clinical_pattern(state.tier1, state.tier2)
-        state.conflicts = aggregator.detect_conflicts(state.tier1, state.tier2)
+        state.unified = aggregate.aggregate(
+            state.case_id, state.differential, state.plan, state.cards)
 
+        # S6 — reason + self-check loop.
         state.set_stage(Stage.REASONING)
         await _reason_and_self_check(state)
 
@@ -102,114 +122,79 @@ async def run_pipeline(state: CaseState) -> None:
 
 
 # ============================================================================ #
-# Stage 1 — screening
+# S4 helpers (run in a worker thread — blocking inference + rendering)
 # ============================================================================ #
 
-async def _run_tier1(inputs: CaseInputs) -> Tier1Result:
-    """Tier-1 screen, degrading gracefully when the MRI path or free text fails.
-
-    Preference order for the optional MRI: a precomputed embedding (fast), then
-    the raw T1 (runs SwinUNETR if SSL weights are present). On any failure we
-    retry clinical-only so screening is never blocked by imaging.
-    """
-    mri = inputs.mri_embedding_path or inputs.t1_path
-    clinical = inputs.clinical
-    # Free text that isn't a file path cannot feed the structured Xue model.
-    if isinstance(clinical, str) and not Path(clinical).exists():
-        clinical = {}
-
-    for attempt_mri in (mri, None):
-        try:
-            return await t1.screen_async(clinical, mri=attempt_mri, explain=True)
-        except Exception:
-            continue
-    # Last resort: clinical-only with whatever mapped (model returns its prior).
-    return await t1.screen_async(clinical if isinstance(clinical, dict) else {},
-                                 mri=None, explain=False)
-
-
-# ============================================================================ #
-# Stage 2 — routing (rules pick tools; LLM rationale added by caller)
-# ============================================================================ #
-
-def _route(tier1: Tier1Result, inputs: CaseInputs) -> RoutingDecision:
-    selected: list[ToolName] = []
-    fired: list[str] = []
-
-    if tier1.p_ad >= P_AD_CENTILOID or tier1.p_mci >= P_MCI_CENTILOID:
-        selected.append(ToolName.CENTILOID)
-        fired.append(
-            f"P(AD)={tier1.p_ad:.2f}≥{P_AD_CENTILOID} or "
-            f"P(MCI)={tier1.p_mci:.2f}≥{P_MCI_CENTILOID} → centiloid"
-        )
-    # MONAI always — when a structural T1 is available to segment.
-    if inputs.t1_path:
-        selected.append(ToolName.MONAI)
-        fired.append("always (T1 present) → monai")
-    else:
-        fired.append("MONAI skipped — no T1 volume supplied")
-
-    return RoutingDecision(selected_tools=selected, fired_rules=fired)
-
-
-# ============================================================================ #
-# Stage 3 — parallel imaging
-# ============================================================================ #
-
-async def _run_imaging(state: CaseState) -> Tier2Result:
-    t1r = state.tier1
-    inp = state.inputs
-    selected = set(state.routing.selected_tools)
-    seed = t1r.input_id or state.case_id
-
-    amyloid_prior = max(t1r.p_ad, t1r.p_mci)
-
-    async def _centiloid():
-        if ToolName.CENTILOID not in selected:
-            return None
-        r = await t2.run_centiloid_async(
-            inp.pet_path, inp.tracer, amyloid_prior=amyloid_prior, seed_key=seed)
-        state.mark_tool_done("centiloid")
-        return r
-
-    async def _monai():
-        if ToolName.MONAI not in selected or not inp.t1_path:
-            return None
-        r = await t2.run_anatomy_async(inp.t1_path)
-        state.mark_tool_done("monai")
-        return r
-
-    centiloid, anatomy = await asyncio.gather(
-        _guard(_centiloid()), _guard(_monai())
-    )
-    return Tier2Result(centiloid=centiloid, anatomy=anatomy)
-
-
-async def _guard(coro):
-    """Run an imaging coroutine; swallow its failure (logged, not fatal)."""
+def _age_sex(features: dict) -> tuple[float | None, str | None]:
+    age = features.get("NACCAGE")
     try:
-        return await coro
-    except Exception:
-        # A tool's absence/failure becomes missing evidence + a surfaced
-        # limitation downstream, not a dead case.
-        return None
+        age = float(age) if age is not None else None
+    except (TypeError, ValueError):
+        age = None
+    sex = {1: "M", 2: "F", "1": "M", "2": "F"}.get(features.get("SEX"))
+    return age, sex
+
+
+def _run_imaging(
+    plan, inp: CaseInputs, age: float | None, sex: str | None,
+) -> tuple[list[tuple[ImagingCheck, Metric]], list[str], list[str]]:
+    """Segment once, then derive each planned metric. Failures → UNAVAILABLE."""
+    metrics: list[tuple[ImagingCheck, Metric]] = []
+    tools: list[str] = []
+    caveats: list[str] = []
+
+    needs_t1 = inp.t1_path and any(c in _T1_CHECKS for c in plan.checks)
+    if needs_t1:
+        try:
+            segmentation.segment(inp.t1_path)  # cached → derive_metric is geometry only (Inv #6)
+            tools.append("segment_t1")
+        except Exception as exc:
+            caveats.append(f"T1 segmentation unavailable ({exc}); structural metrics "
+                           "could not be computed and are reported as not assessed.")
+
+    for check in plan.checks:
+        try:
+            if check is ImagingCheck.FAZEKAS:
+                metric = wmh.fazekas(inp.flair_path)
+                tools.append("wmh_fazekas")
+            else:
+                metric = segmentation.derive_metric(inp.t1_path, check, age=age, sex=sex)
+                tools.append(f"derive_metric:{check.value}")
+        except Exception as exc:  # belt-and-braces — no fabricated value
+            metric = Metric(
+                etiology=CHECK_ETIOLOGY[check], name=check.value, value=None,
+                threshold=0.0, comparator="<", status=MetricStatus.UNAVAILABLE,
+                caveats=[f"compute failed: {exc}"])
+        metrics.append((check, metric))
+    return metrics, tools, caveats
+
+
+def _translate_all(
+    metrics: list[tuple[ImagingCheck, Metric]], plan, inp: CaseInputs,
+) -> list[FindingCard]:
+    """S4d: a finding card per metric (+ explicit abstain cards) — Inv #7/#8."""
+    cards: list[FindingCard] = []
+    for check, metric in metrics:
+        t1 = inp.t1_path if check in _T1_CHECKS else None
+        cards.append(reasoner.translate(metric, check=check, t1_path=t1))
+
+    modalities = router.available_modalities(inp.t1_path, inp.flair_path)
+    for etiology in plan.abstained:
+        cards.append(reasoner.abstain_card(etiology, modalities))
+    return cards
 
 
 # ============================================================================ #
-# Stage 5 — reasoning + self-check loop
+# S6 — reasoning + self-check loop
 # ============================================================================ #
 
 async def _reason_and_self_check(state: CaseState) -> None:
-    ctx = llm.build_report_context(
-        state.case_id, state.tier1, state.routing, state.tier2,
-        state.pattern, state.conflicts,
-    )
-    markdown = await llm.write_report(ctx)
+    markdown = await reasoner.write_report(state.unified)
     max_iter = _max_iter()
 
     for attempt in range(1, max_iter + 1):
         state.set_stage(self_check_stage(attempt))
-        violations = await llm.critique(markdown)
+        violations = await reasoner.critique(markdown)
 
         if not violations:
             state.report = CrychicReport(
@@ -222,9 +207,8 @@ async def _reason_and_self_check(state: CaseState) -> None:
                 markdown=markdown, self_check_passed=False, iterations=attempt,
                 remaining_violations=violations,
                 warning=f"Self-check did not converge in {max_iter} iterations; "
-                        "returned with unresolved CDS findings.",
-            )
+                        "returned with unresolved CDS findings.")
             return
 
         state.set_stage(revising_stage(attempt))
-        markdown = await llm.revise(markdown, violations, ctx)
+        markdown = await reasoner.revise(markdown, violations, state.unified)

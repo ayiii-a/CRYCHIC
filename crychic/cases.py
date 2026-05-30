@@ -1,13 +1,12 @@
 """Loader for the bundled OASIS-3 demo cohort.
 
-Demo-data glue (``data/crychic_oasis12.csv`` + ``data/mri_emb/*.npy``), not part
-of the pipeline contracts. For each record it:
+Demo-data glue (``data/crychic_oasis12.csv``), not part of the pipeline contracts.
+For each record it strips the trailing ground-truth label columns from the model
+inputs and exposes the held-out labels for display.
 
-* strips the trailing ground-truth label columns from the model inputs,
-* maps the case to its optional precomputed SwinUNETR embedding by subject id.
-
-The MRI embedding is **optional** throughout: a case with no matching ``.npy``
-still yields a valid clinical-only case.
+It also centralizes per-subject file discovery (T1, FLAIR, MRI embedding) so the
+web UI and the CLI resolve the same paths from one place: :func:`find_t1`,
+:func:`find_flair`, :func:`find_emb`.
 """
 
 from __future__ import annotations
@@ -39,12 +38,7 @@ class DemoCase:
     id: str                       # e.g. "A1_OAS30073"
     subject: str                  # e.g. "OAS30073"
     clinical: dict                # UDS variables fed to the model (labels removed)
-    embedding_path: Path | None   # precomputed SwinUNETR .npy, or None
     labels: dict[str, int]        # ground truth, canonical names {NC, AD, ...}
-
-    @property
-    def has_mri(self) -> bool:
-        return self.embedding_path is not None
 
     @property
     def true_stage(self) -> str | None:
@@ -60,10 +54,29 @@ def _data_dir() -> Path:
     return Path(os.environ.get("CRYCHIC_DATA_DIR", _DATA_DIR)).expanduser()
 
 
-def _find_embedding(subject: str, emb_dir: Path) -> Path | None:
-    """First ``<subject>_*_emb.npy`` under ``emb_dir`` (one per subject here)."""
-    hits = sorted(emb_dir.glob(f"{subject}_*_emb.npy"))
-    return hits[0] if hits else None
+# --- per-subject imaging file discovery (one source of truth) ---------------- #
+
+def _first(glob_dir: Path, pattern: str) -> str | None:
+    hits = sorted(glob_dir.glob(pattern))
+    return str(hits[0]) if hits else None
+
+
+def find_t1(subject: str) -> str | None:
+    """The skull-stripped, MNI-registered T1 for a subject (the MONAI seg input)."""
+    return _first(_data_dir() / "mri_prepro", f"{subject}_*_stripped_MNI.nii.gz")
+
+
+def find_flair(subject: str) -> str | None:
+    """A FLAIR coregistered to the T1 grid, if present (enables the VD/Fazekas axis).
+
+    Produced by ``scripts/coreg_flair.py``; absent for the bundled T1-only cohort.
+    """
+    return _first(_data_dir() / "mri_prepro", f"{subject}_*FLAIR*.nii.gz")
+
+
+def find_emb(subject: str) -> str | None:
+    """The precomputed SwinUNETR embedding for the multimodal Xue model, if present."""
+    return _first(_data_dir() / "mri_emb", f"{subject}_*_emb.npy")
 
 
 def _clean(value):
@@ -73,14 +86,10 @@ def _clean(value):
     return value
 
 
-def load_demo_cases(
-    csv_path: str | Path | None = None,
-    emb_dir: str | Path | None = None,
-) -> list[DemoCase]:
-    """Load every case in the demo cohort as a :class:`DemoCase`."""
+def load_demo_cases(csv_path: str | Path | None = None) -> list[DemoCase]:
+    """Load every case in the demo cohort as a :class:`DemoCase` (clinical-only)."""
     data_dir = _data_dir()
     csv_path = Path(csv_path) if csv_path else data_dir / "crychic_oasis12.csv"
-    emb_dir = Path(emb_dir) if emb_dir else data_dir / "mri_emb"
 
     df = pd.read_csv(csv_path)
     cases: list[DemoCase] = []
@@ -99,11 +108,5 @@ def load_demo_cases(
             else:
                 clinical[col] = val
 
-        cases.append(DemoCase(
-            id=rid,
-            subject=subject,
-            clinical=clinical,
-            embedding_path=_find_embedding(subject, emb_dir),
-            labels=labels,
-        ))
+        cases.append(DemoCase(id=rid, subject=subject, clinical=clinical, labels=labels))
     return cases

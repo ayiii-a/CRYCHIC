@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/home/jimmy/fsl/bin/python3 -c 'import importlib.util as u; [print\\(f'\\\\''{m}:'\\\\'', '\\\\''OK'\\\\'' if u.find_spec\\(m\\) else '\\\\''MISSING'\\\\''\\) for m in ['\\\\''torch'\\\\'','\\\\''numpy'\\\\'','\\\\''pandas'\\\\'','\\\\''sklearn'\\\\'','\\\\''scipy'\\\\'','\\\\''tqdm'\\\\'','\\\\''matplotlib'\\\\'','\\\\''seaborn'\\\\'','\\\\''icecream'\\\\'','\\\\''monai'\\\\'','\\\\''nibabel'\\\\'','\\\\''mcp'\\\\'','\\\\''pydantic'\\\\'']]')",
+      "Read(//home/jimmy/fsl/lib/python3.12/site-packages/mygo_centiloid/**)",
+      "Read(//home/jimmy/fsl/lib/python3.12/site-packages/mygo_centiloid/model/**)",
+      "Bash(python3 -c \"import mygo_centiloid; print\\('ok', mygo_centiloid.__file__\\)\")",
+      "Bash(python3 -c ' *)",
+      "Bash(python scripts/smoke_offline.py)",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import crychic_web, crychic.pipeline, crychic.xue, crychic.cases; from crychic.cases import find_t1, find_flair, find_emb; print\\('imports OK'\\)\")",
+      "Bash(timeout 280 python -c ' *)",
+      "Bash(flirt -version)",
+      "Bash(convert_xfm)",
+      "Bash(bet)",
+      "Bash(python scripts/coreg_flair.py --help)",
+      "Bash(python scripts/coreg_flair.py --subject OAS30073 --flair /nope/flair.nii.gz)",
+      "Bash(./scripts/coreg_all_flair.sh)",
+      "Bash(awk '{print $5, $9}')",
+      "Bash(timeout 120 python -c ' *)",
+      "Bash(grep -v \"FutureWarning\\\\|INFO -\\\\|cudart\\\\|^$\")"
+    ]
+  }
+}

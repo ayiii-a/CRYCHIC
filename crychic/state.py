@@ -1,19 +1,20 @@
 """In-memory, ephemeral case store.
 
 A :class:`CaseState` is the single shared object a pipeline run mutates as it
-advances and the MCP status/evidence tools read from. There is intentionally no
-persistence: this is a CDS *draft* workspace, and nothing here is a medical
-record until a clinician signs the report outside the system.
+advances and the status/evidence readers consume. There is intentionally no
+persistence: this is a CDS *draft* workspace, and nothing here is a medical record
+until a clinician signs the report outside the system.
 
 Concurrency model
 -----------------
 Everything runs on one asyncio event loop. The pipeline coroutine mutates a
-``CaseState`` between ``await`` points; the ``get_pipeline_status`` /
-``get_case_evidence`` handlers only read it. Blocking inference is pushed to
-worker threads via :func:`asyncio.to_thread`, but the *result* is assigned back
-on the loop thread, so the state object itself is never touched from two threads
-at once. Attribute writes are plain and need no lock; the store's ``create`` is
-guarded only to keep id generation tidy.
+``CaseState`` between ``await`` points; status/evidence readers only read it.
+Blocking inference is pushed to worker threads via ``asyncio.to_thread``, but the
+*result* is assigned back on the loop thread, so the state object is never touched
+from two threads at once.
+
+Inputs are clinical + T1 (± FLAIR) + an optional precomputed MRI embedding fed to
+the multimodal Xue model. PET/tracer input remains out of scope (§8).
 """
 
 from __future__ import annotations
@@ -27,26 +28,28 @@ from typing import Any
 
 from .schemas import (
     CaseEvidence,
-    ClinicalPattern,
-    Conflict,
     CrychicReport,
-    RoutingDecision,
-    Tier1Result,
-    Tier2Result,
+    Differential,
+    FindingCard,
+    ImagingPlan,
+    UnifiedEvidence,
+    XueFeatures,
 )
 
 
 class Stage(str, Enum):
-    """The fixed stages. The critic loop also sets dynamic string stages
-    (``self_check_attempt_1``, ``revising_attempt_1``, ...) via :meth:`set_stage`.
+    """The fixed spine stages (CLAUDE.md §3). The critic loop also sets dynamic
+    string stages (``self_check_attempt_1``, ``revising_attempt_1``, ...).
     """
 
     INITIALIZED = "initialized"
-    SCREENING = "screening"
-    ROUTING = "routing"
-    IMAGING = "imaging"
-    AGGREGATING = "aggregating"
-    REASONING = "reasoning"
+    EXTRACTING = "extracting"        # S1
+    SCREENING = "screening"          # S2 xue_predict
+    ROUTING = "routing"              # S3 router
+    IMAGING = "imaging"              # S4a/b/c
+    TRANSLATING = "translating"      # S4d finding cards
+    AGGREGATING = "aggregating"      # S5
+    REASONING = "reasoning"          # S6
     SELF_CHECK_PASSED = "self_check_passed"
     COMPLETE = "complete"
     FAILED = "failed"
@@ -62,23 +65,24 @@ def revising_stage(attempt: int) -> str:
 
 @dataclass
 class CaseInputs:
-    """What the caller handed to ``run_crychic_pipeline``.
+    """What the caller handed to the pipeline.
 
-    ``clinical`` is the raw UDS dict (or free text) for Tier-1; ``pet_path`` is
-    optional because the bundled demo cohort is T1-only — Centiloid degrades to
-    a surfaced limitation when no PET is supplied.
+    ``clinical`` is a raw UDS dict, a path to a record, or a free-text note (S1
+    resolves it). ``mri_emb_path`` is the optional precomputed SwinUNETR embedding
+    fed to the multimodal Xue model (S2). ``t1_path`` drives the independent
+    structural geometry (S4); ``flair_path`` is optional and enables the WMH/Fazekas
+    (VD) axis — without it that axis abstains.
     """
 
     clinical: dict | str
     t1_path: str | None = None
-    pet_path: str | None = None
-    tracer: str | None = None
-    mri_embedding_path: str | None = None  # precomputed SwinUNETR .npy for Tier-1
+    flair_path: str | None = None
+    mri_emb_path: str | None = None
 
 
 @dataclass
 class CaseState:
-    """Mutable, per-case workspace shared between the pipeline and the tools."""
+    """Mutable, per-case workspace shared between the pipeline and the readers."""
 
     case_id: str
     inputs: CaseInputs
@@ -89,11 +93,11 @@ class CaseState:
     finished_at: float | None = None
 
     # Stage outputs, filled in as the pipeline advances.
-    tier1: Tier1Result | None = None
-    routing: RoutingDecision | None = None
-    tier2: Tier2Result | None = None
-    pattern: ClinicalPattern | None = None
-    conflicts: list[Conflict] = field(default_factory=list)
+    features: XueFeatures | None = None
+    differential: Differential | None = None
+    plan: ImagingPlan | None = None
+    cards: list[FindingCard] = field(default_factory=list)
+    unified: UnifiedEvidence | None = None
     report: CrychicReport | None = None
 
     # --- mutation helpers (called by the pipeline) ------------------------- #
@@ -122,9 +126,8 @@ class CaseState:
     def is_terminal(self) -> bool:
         return self.stage in (Stage.COMPLETE.value, Stage.FAILED.value)
 
-    # --- read helpers (called by the MCP tools) --------------------------- #
+    # --- read helpers (called by the status/evidence layer) --------------- #
     def status(self) -> dict[str, Any]:
-        """Payload for ``get_pipeline_status``."""
         return {
             "case_id": self.case_id,
             "stage": self.stage,
@@ -134,24 +137,27 @@ class CaseState:
         }
 
     def evidence(self, fields: list[str] | None = None) -> CaseEvidence:
-        """Build the ``CaseEvidence`` view for ``get_case_evidence``.
+        """Build the ``CaseEvidence`` view; ``fields`` selects a subset.
 
-        ``fields`` selects a subset (``tier1``, ``routing``, ``tier2``,
-        ``pattern``, ``conflicts``, ``report``); ``None`` returns everything
-        available so far. Unknown field names are ignored.
+        Selectable: ``features``, ``differential``, ``plan``, ``cards``,
+        ``reconciliations``, ``conflicts``, ``report``. Reconciliations and
+        conflicts are read from the unified bundle when present.
         """
         want = set(fields) if fields else None
 
         def take(name: str) -> bool:
             return want is None or name in want
 
+        recon = self.unified.reconciliations if self.unified else None
+        conflicts = self.unified.conflicts if self.unified else None
         return CaseEvidence(
             case_id=self.case_id,
-            tier1=self.tier1 if take("tier1") else None,
-            routing=self.routing if take("routing") else None,
-            tier2=self.tier2 if take("tier2") else None,
-            pattern=self.pattern if take("pattern") else None,
-            conflicts=(self.conflicts if take("conflicts") else None),
+            features=self.features if take("features") else None,
+            differential=self.differential if take("differential") else None,
+            plan=self.plan if take("plan") else None,
+            cards=(self.cards if take("cards") else None) or None,
+            reconciliations=(recon if take("reconciliations") else None),
+            conflicts=(conflicts if take("conflicts") else None),
             report=self.report if take("report") else None,
         )
 
@@ -166,7 +172,7 @@ class CaseStore:
     def create(self, inputs: CaseInputs) -> CaseState:
         with self._lock:
             case_id = f"case_{uuid.uuid4().hex[:8]}"
-            while case_id in self._cases:  # vanishingly unlikely; keep ids unique
+            while case_id in self._cases:
                 case_id = f"case_{uuid.uuid4().hex[:8]}"
             state = CaseState(case_id=case_id, inputs=inputs)
             self._cases[case_id] = state
@@ -179,5 +185,5 @@ class CaseStore:
         return list(self._cases)
 
 
-# One store per server process. The pipeline writes here; the tools read here.
+# One store per process. The pipeline writes here; the readers read here.
 STORE = CaseStore()

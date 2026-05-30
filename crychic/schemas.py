@@ -1,22 +1,31 @@
-
 """Pydantic data contracts shared across the CRYCHIC pipeline.
 
-One validated model per pipeline stage, in execution order:
+`schemas.py` is the single source of truth for I/O (CLAUDE.md §5): the MCP tool
+signatures and the agent code both import from here, so a change to a contract
+updates both sides together.
 
-    Tier1Result        Stage 1  clinical screening (Xue 2024)
-    RoutingDecision    Stage 2  which imaging tools the rules selected
-    CentiloidResult    Stage 3  MYGO amyloid-PET quantification
-    AnatomyResult      Stage 3  MONAI wholeBrainSeg structural metrics
-    Tier2Result        Stage 3  the imaging results, bundled
-    ClinicalPattern    Stage 4  matched AD-spectrum pattern (1 of 6)
-    Conflict           Stage 4  surfaced evidence conflict (never overridden)
-    CrychicReport      Stage 5  the signed-off-able Markdown draft
-    CaseEvidence       what get_case_evidence returns (all of the above)
+One validated model per pipeline step, in execution order (CLAUDE.md §3):
 
-Keeping every stage's output as an explicit, validated model is what makes the
-pipeline auditable (CDS principle #3, traceable claims): each numeric field
-travels with the ``threshold`` it is judged against and the ``reference`` it
-comes from, so the reasoner can never emit a bare number.
+    XueFeatures        S1  note/dict → Xue feature dict + per-feature confidence
+    Differential       S2  xue_predict — the 13-label differential, CLINICAL ONLY
+    ImagingPlan        S3  router — which imaging checks to dispatch (the one decision)
+    Metric             S4b/c  one derived quantitative biomarker (value+threshold+ref)
+    FindingCard        S4d  the radiology-style card a clinician reviews
+    Reconciliation     S5  per-etiology concordance of probs vs imaging
+    UnifiedEvidence    S5  the merged, provenance-tagged evidence bundle
+    CrychicReport      S6  the signed-off-able Markdown draft + self-check verdict
+    CaseEvidence       what get_case_evidence returns (a selectable view)
+
+Two invariants are encoded structurally here, not just by convention:
+
+* **Numbers are computed, never authored (Inv #2).** Every quantitative value
+  lives on a :class:`Metric` and travels with the ``threshold`` it is judged
+  against and the ``reference`` it comes from. The sentence generator (S4d) only
+  *injects* those digits as fixed tokens — it cannot invent a number, because the
+  number does not originate in prose.
+* **No fabricated measurements (Inv #2, #7).** A biomarker is either ``measured``,
+  ``unavailable`` (no weights/segmentation), or an explicit ``abstain`` (no
+  structural correlate for that etiology). There is no synthetic-number path.
 """
 
 from __future__ import annotations
@@ -27,23 +36,100 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 # --- The Xue 2024 label set (13 non-mutually-exclusive probabilities). --------
-# Cognitive stage is one axis; etiologies are a second, indepen
-# dent axis — a
-# patient can have elevated P(AD), P(VD) and P(MCI) at once.
+# Cognitive stage is one axis; etiology is a second, independent axis — a patient
+# can carry elevated P(AD), P(VD) and P(MCI) at once (real-world comorbidity).
 STAGE_LABELS: tuple[str, ...] = ("NC", "MCI", "DE")
 ETIOLOGY_LABELS: tuple[str, ...] = (
     "AD", "LBD", "VD", "PRD", "FTD", "NPH", "SEF", "PSY", "TBI", "ODE",
 )
 ALL_LABELS: tuple[str, ...] = STAGE_LABELS + ETIOLOGY_LABELS
 
+# Etiologies with no defended off-the-shelf structural MONAI metric (CLAUDE.md
+# §2.8, §4). For these we output "no imaging correlate available — rely on clinical
+# features" and NEVER imply imaging confirmed or cleared them. FTD is here after the
+# v0.5 trim: its lobar-Z check used a synthetic (non-atlas-matched) norm and was
+# retired, so FTD is now left to the clinical features. ODE maps to a BraTS tumor
+# read in principle, but that axis is niche and not built here, so it also abstains.
+ABSTAIN_ETIOLOGIES: tuple[str, ...] = ("PRD", "SEF", "PSY", "TBI", "LBD", "FTD")
+
+
+class Modality(str, Enum):
+    """An imaging input that may or may not be present for a case."""
+
+    T1 = "t1"        # structural T1w — free whole-brain segmentation
+    FLAIR = "flair"  # FLAIR — needed for the WMH/Fazekas (VD) axis
+
+
+class ImagingCheck(str, Enum):
+    """A structural biomarker the router may dispatch (CLAUDE.md §4).
+
+    Each check speaks to exactly one etiology and needs exactly one modality. The
+    full per-check declaration (thresholds, references, overlay, sentences) lives in
+    :mod:`crychic.checks`; this enum and the two maps below are the minimal
+    schema-level identity the router reads to gate on modality.
+    """
+
+    HIPPO_Z = "hippo_z"   # AD  — hippocampal w-score (TIV-normalized) [T1]
+    EVANS = "evans"       # NPH — automated Evans-like screening flag  [T1]
+    FAZEKAS = "fazekas"   # VD  — WMH volume → Fazekas grade           [FLAIR]
+
+
+# check → (etiology it informs, modality it requires). The router reads these so
+# it never dispatches a check whose modality is absent (CLAUDE.md §3, §4).
+CHECK_ETIOLOGY: dict[ImagingCheck, str] = {
+    ImagingCheck.HIPPO_Z: "AD",
+    ImagingCheck.EVANS: "NPH",
+    ImagingCheck.FAZEKAS: "VD",
+}
+CHECK_MODALITY: dict[ImagingCheck, Modality] = {
+    ImagingCheck.HIPPO_Z: Modality.T1,
+    ImagingCheck.EVANS: Modality.T1,
+    ImagingCheck.FAZEKAS: Modality.FLAIR,
+}
+
+
+class MetricStatus(str, Enum):
+    """Whether a biomarker was actually measured — guards against fake numbers."""
+
+    MEASURED = "measured"          # a real model/geometry forward pass produced the value
+    UNAVAILABLE = "unavailable"    # weights/segmentation/modality missing — no value
+    ABSTAIN = "abstain"            # no structural correlate exists for this etiology
+
+
+# ============================================================================ #
+# S1 — feature extraction
+# ============================================================================ #
+
+class XueFeatures(BaseModel):
+    """S1 output: the structured UDS features that feed xue_predict.
+
+    ``source`` records how the features were obtained: ``structured`` when the
+    caller already passed a UDS dict (the demo path — confidences are 1.0), or
+    ``extracted`` when an LLM parsed them out of a free-text clinical note.
+    """
+
+    features: dict[str, Any] = Field(
+        default_factory=dict, description="Raw UDS variables fed to the model."
+    )
+    confidences: dict[str, float] = Field(
+        default_factory=dict,
+        description="Per-feature extraction confidence in [0,1]; 1.0 when structured.",
+    )
+    source: str = Field("structured", description="'structured' | 'extracted'.")
+    caveats: list[str] = Field(default_factory=list)
+
+
+# ============================================================================ #
+# S2 — the dementia differential (Xue 2024, multimodal: clinical + MRI embedding)
+# ============================================================================ #
 
 class AttributionHeatmap(BaseModel):
-    """Feature x 13-label leave-one-out occlusion attribution.
+    """Feature × 13-label leave-one-out occlusion attribution.
 
-    ``values[i][j]`` = P(full)[label_j] - P(without feature_i)[label_j]; a
-    positive value means feature ``i`` pushed label ``j`` up. Mirrors the
-    structure produced by ``adrd_tool``; file paths are populated only when an
-    output directory was supplied.
+    ``values[i][j]`` = P(full)[label_j] − P(without feature_i)[label_j]; a
+    positive value means feature ``i`` pushed label ``j`` up. When the MRI embedding
+    was fed to the model there is also an "MRI (img)" row = P(with MRI) −
+    P(clinical-only).
     """
 
     kind: str
@@ -55,11 +141,15 @@ class AttributionHeatmap(BaseModel):
     png_path: str | None = None
 
 
-class Tier1Result(BaseModel):
-    """Structured output of Stage 1 (clinical screening).
+class Differential(BaseModel):
+    """S2 output: the 13-label dementia differential from the Xue 2024 model.
 
     Carries the two probability axes separately plus the flat 13-label map, and
-    exposes the handful of probabilities the router's hard-coded rules read.
+    exposes the handful of probabilities the router reads by name. ``imaging_used``
+    records whether the SwinUNETR MRI embedding was fed to the model: when True the
+    differential is multimodal, so S5 reconciliation against the structural finding
+    cards is a *consistency check on already-imaging-informed probabilities*, not an
+    independent second opinion — the report wording reflects that.
     """
 
     stage_probs: dict[str, float] = Field(
@@ -68,21 +158,21 @@ class Tier1Result(BaseModel):
     etiology_probs: dict[str, float] = Field(
         ..., description="P over the 10 etiologies (AD, LBD, VD, ...)."
     )
-    all_probs: dict[str, float] = Field(
-        ..., description="Flat map over all 13 labels."
-    )
+    all_probs: dict[str, float] = Field(..., description="Flat map over all 13 labels.")
     stage_top: str
     etiology_top: str
 
+    imaging_used: bool = Field(
+        False, description="True when the MRI embedding was fed to the Xue model."
+    )
     n_clinical_features: int = Field(
         0, description="How many raw UDS variables actually mapped into the model."
     )
-    imaging_used: bool = False
     input_id: str | None = None
     caveats: list[str] = Field(default_factory=list)
     heatmap: AttributionHeatmap | None = None
 
-    # --- router conveniences: the rules in Stage 2 read these by name. --------
+    # --- router conveniences: the rules in S3 read these by name. -------------
     def p(self, label: str) -> float:
         """Probability for any label, 0.0 if absent (never raises on a typo)."""
         return float(self.all_probs.get(label, 0.0))
@@ -99,96 +189,121 @@ class Tier1Result(BaseModel):
     def p_vd(self) -> float:
         return self.p("VD")
 
-
-# --- Stage 2: routing ---------------------------------------------------------
-# The LLM writes the rationale; these hard-coded rules decide what actually runs
-# (CLAUDE.md §2.3). Splitting the two keeps the execution path auditable.
-
-class ToolName(str, Enum):
-    CENTILOID = "centiloid"   # MYGO amyloid-PET quantification
-    MONAI = "monai"           # wholeBrainSeg anatomy
+    @property
+    def impaired(self) -> bool:
+        """True when the most likely cognitive stage is MCI or dementia."""
+        return self.stage_top in ("MCI", "DE")
 
 
-class RoutingDecision(BaseModel):
-    """Which imaging tools fire, why (rules), and the LLM's prose rationale."""
+# ============================================================================ #
+# S3 — the imaging plan (the one real LLM decision — Inv #5)
+# ============================================================================ #
 
-    selected_tools: list[ToolName]
+class ImagingPlan(BaseModel):
+    """S3 output: which imaging checks to dispatch, why, and what we abstain on.
+
+    The LLM router *chooses* ``checks`` from those whose modality is present;
+    ``fired_rules`` is the deterministic audit trail (and the offline fallback's
+    output), and ``abstained`` names the etiologies we explicitly will not speak
+    to from imaging (Inv #8).
+    """
+
+    checks: list[ImagingCheck] = Field(default_factory=list)
+    rationale: str = Field("", description="LLM clinical reasoning for the selection.")
     fired_rules: list[str] = Field(
         default_factory=list,
-        description="Human-readable rule firings, e.g. 'P(AD)=0.62 ≥ 0.30 → centiloid'.",
+        description="Human-readable rule firings, e.g. 'P(AD)=0.62 ≥ 0.30 → hippo_z'.",
     )
-    rationale: str = Field(
-        "", description="LLM-generated clinical reasoning for the selection."
+    abstained: list[str] = Field(
+        default_factory=list,
+        description="Etiologies with no imaging correlate (Inv #8) or no modality.",
     )
 
 
-# --- Stage 3: imaging ---------------------------------------------------------
-# `source` distinguishes a real model forward pass from a deterministic
-# placeholder, so a report can never silently present a stub as a measurement.
+# ============================================================================ #
+# S4 — derived biomarkers and the cards that present them
+# ============================================================================ #
 
-class ImagingSource(str, Enum):
-    MODEL = "model"           # real checkpoint / bundle forward pass
-    SYNTHETIC = "synthetic"   # deterministic placeholder (no weights available)
+class Metric(BaseModel):
+    """One derived quantitative biomarker (S4b/S4c).
 
+    Every measured metric travels with the ``threshold`` it is judged against,
+    the ``comparator`` that defines abnormality, and the ``reference`` it comes
+    from — so a finding can always be traced and the number never floats free of
+    its meaning (Inv #2, #7).
+    """
 
-class CentiloidResult(BaseModel):
-    """MYGO-Centiloid: amyloid-PET burden on the standardized Centiloid scale."""
-
-    centiloid: float = Field(..., description="Centiloid value (Klunk 2015 scale).")
-    positive: bool = Field(..., description="centiloid ≥ threshold.")
-    threshold: float = 20.0
-    tracer: str | None = None
-    cortical_suvr: float | None = None
-    source: ImagingSource = ImagingSource.MODEL
-    reference: str = "Klunk et al. 2015 (Centiloid standardization); GAAIN ≥20 positivity."
+    etiology: str = Field(..., description="Which differential label this informs.")
+    name: str = Field(..., description="Display name, e.g. 'Hippocampal volume Z'.")
+    value: float | None = Field(None, description="The computed value; None if unmeasured.")
+    unit: str = ""
+    threshold: float = Field(..., description="Abnormality cutoff for `comparator`.")
+    comparator: str = Field("<", description="One of '<', '<=', '>', '>=' vs threshold.")
+    abnormal: bool = Field(False, description="True when value crosses the threshold.")
+    status: MetricStatus = MetricStatus.MEASURED
+    reference: str = Field("", description="Citation / normative source for the threshold.")
     caveats: list[str] = Field(default_factory=list)
-
-
-class AnatomyResult(BaseModel):
-    """MONAI wholeBrainSeg: structural metrics derived from a T1 segmentation."""
-
-    hippocampus_left_mm3: float | None = None
-    hippocampus_right_mm3: float | None = None
-    hippocampus_total_mm3: float | None = None
-    hippocampus_zscore: float | None = Field(
-        None, description="Hippocampal volume Z vs age/ICV norms; ≤ -1.5 = atrophy."
-    )
-    ventricle_volume_mm3: float | None = None
-    ventricular_index: float | None = Field(
-        None, description="Lateral ventricle / brain volume; elevated → ventriculomegaly."
-    )
-    dominant_atrophy: str = Field(
-        "none",
-        description="'medial_temporal' | 'frontotemporal' | 'global' | 'ventriculomegaly' | 'none'.",
-    )
-    n_labels: int = Field(0, description="Segmented structures (133 for the UNEST protocol).")
-    atrophy_zscore_threshold: float = -1.5
-    source: ImagingSource = ImagingSource.MODEL
-    reference: str = "MONAI wholeBrainSeg (UNEST, 133-label protocol); hippocampal Z per NIA-AA structural criteria."
-    caveats: list[str] = Field(default_factory=list)
-
-
-class Tier2Result(BaseModel):
-    """The Stage-3 imaging bundle. Each tool is optional (gated by the router)."""
-
-    centiloid: CentiloidResult | None = None
-    anatomy: AnatomyResult | None = None
 
     @property
-    def amyloid_positive(self) -> bool | None:
-        return None if self.centiloid is None else self.centiloid.positive
+    def direction(self) -> str:
+        """Qualitative direction vs threshold: 'below' | 'above' | 'within' | 'n/a'."""
+        if self.value is None:
+            return "n/a"
+        if self.value < self.threshold:
+            return "below"
+        if self.value > self.threshold:
+            return "above"
+        return "within"
 
 
-# --- Stage 4: aggregation (pattern + conflicts) -------------------------------
+class KeySlice(BaseModel):
+    """The slice a clinician should verify a finding on."""
 
-class ClinicalPattern(BaseModel):
-    """One of 6 predefined AD-spectrum patterns (CLAUDE.md §2.5)."""
+    plane: str = Field(..., description="'axial' | 'coronal' | 'sagittal'.")
+    index: int = Field(..., description="Slice index along that plane.")
 
-    pattern_id: int = Field(..., ge=1, le=6)
-    name: str
-    rationale: str
-    supporting_evidence: list[str] = Field(default_factory=list)
-    confidence: str = Field("moderate", description="'low' | 'moderate' | 'high'.")
+
+class FindingCard(BaseModel):
+    """S4d output: a radiology-style finding card (CLAUDE.md §1, §7).
+
+    The credibility anchor of the UI. ``sentence`` is generated with the metric's
+    digits injected as **fixed tokens** (Inv #2) — the language model may shape
+    the qualitative framing but can never emit a different number. A negative
+    finding still produces a card, and an abstain produces a card too (Inv #7/#8).
+    """
+
+    etiology: str
+    title: str
+    metric: Metric | None = None
+    sentence: str = Field("", description="Guardrailed impression; digits are injected tokens.")
+    polarity: str = Field(
+        "negative", description="'supporting' | 'negative' | 'abstain'."
+    )
+    key_slice: KeySlice | None = None
+    overlay_png_path: str | None = None
+    references: list[str] = Field(default_factory=list)
+
+
+# ============================================================================ #
+# S5 — reconciliation, conflicts, and the unified bundle (plain code)
+# ============================================================================ #
+
+class ReconClass(str, Enum):
+    """How a differential label lines up with its imaging axis (CLAUDE.md §3)."""
+
+    CONCORDANT = "concordant"        # high prob + supporting imaging
+    DISCORDANT = "discordant"        # high prob + contradicting imaging → flag
+    CLINICAL_ONLY = "clinical_only"  # high prob + no imaging axis available
+    INCIDENTAL = "incidental"        # low prob + positive imaging
+
+
+class Reconciliation(BaseModel):
+    """One etiology's prob-vs-imaging concordance verdict."""
+
+    etiology: str
+    prob: float
+    recon: ReconClass
+    evidence: list[str] = Field(default_factory=list)
 
 
 class ConflictSeverity(str, Enum):
@@ -207,7 +322,24 @@ class Conflict(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
-# --- Stage 5: report ----------------------------------------------------------
+class UnifiedEvidence(BaseModel):
+    """S5 output: the merged, provenance-tagged evidence bundle the reasoner reads."""
+
+    case_id: str
+    differential: Differential
+    plan: ImagingPlan
+    cards: list[FindingCard] = Field(default_factory=list)
+    reconciliations: list[Reconciliation] = Field(default_factory=list)
+    conflicts: list[Conflict] = Field(default_factory=list)
+    provenance: list[str] = Field(
+        default_factory=list,
+        description="Tool/reference that produced each value, for auditability.",
+    )
+
+
+# ============================================================================ #
+# S6 — the report
+# ============================================================================ #
 
 class CrychicReport(BaseModel):
     """The Markdown draft plus the self-check loop's verdict."""
@@ -221,19 +353,22 @@ class CrychicReport(BaseModel):
     )
 
 
-# --- Aggregate evidence (what get_case_evidence returns) ----------------------
+# ============================================================================ #
+# Aggregate evidence (what get_case_evidence returns)
+# ============================================================================ #
 
 class CaseEvidence(BaseModel):
     """Structured intermediate evidence for one case, by field name.
 
-    ``get_case_evidence`` returns whichever of these the caller asked for; all
-    are optional because a case is built up stage by stage.
+    ``get_case_evidence`` returns whichever of these the caller asked for; all are
+    optional because a case is built up stage by stage.
     """
 
     case_id: str
-    tier1: Tier1Result | None = None
-    routing: RoutingDecision | None = None
-    tier2: Tier2Result | None = None
-    pattern: ClinicalPattern | None = None
+    features: XueFeatures | None = None
+    differential: Differential | None = None
+    plan: ImagingPlan | None = None
+    cards: list[FindingCard] | None = None
+    reconciliations: list[Reconciliation] | None = None
     conflicts: list[Conflict] | None = None
     report: CrychicReport | None = None

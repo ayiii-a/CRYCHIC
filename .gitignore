@@ -19,8 +19,12 @@ adrd_nmed2024/assets/model_swinvit.pt
 # MONAI Model-Zoo bundles are downloaded automatically on first use.
 checkpoints/
 
+# Rendered finding-card overlays (regenerated per pipeline run).
+.crychic_overlays/
+
 # OASIS-3-derived inputs: controlled-access and large — do not redistribute.
 data/
 
 # Misc
 *.log
+report_*.html

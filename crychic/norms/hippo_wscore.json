@@ -1,0 +1,17 @@
+{
+  "model": "hippocampus_wscore_v1",
+  "formula": "V_hippo_total_mm3 ~ intercept + b_age*age_years + b_sex_male*sex_male + b_tiv*tiv_mm3",
+  "intercept": 5125.0,
+  "b_age": -35.0,
+  "b_sex_male": 560.0,
+  "b_tiv": 0.004,
+  "residual_sd": 700.0,
+  "age_mean": 65.0,
+  "sex_male_mean": 0.45,
+  "tiv_mean": 1200000.0,
+  "n": 0,
+  "source": "placeholder",
+  "threshold": -1.5,
+  "reference": "Method: hippocampal w-score (residualized for age, sex, TIV) per BrainChart (Bethlehem et al., Nature 2022) and Potvin et al. 2016 normative subcortical modelling. Coefficients here are an UNCALIBRATED placeholder, NOT fit on a same-pipeline cohort.",
+  "note": "PLACEHOLDER (n=0, source=placeholder). Regenerate with scripts/fit_hippo_wscore.py on a cognitively-normal cohort segmented by THIS MONAI bundle before any clinical interpretation."
+}

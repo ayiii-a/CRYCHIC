@@ -69,22 +69,25 @@ This is symptom/function alignment.
 
 ### 2. Route additional tools
 
-The project currently uses deterministic thresholds:
+The router runs the free T1 structural baseline whenever a T1 is present, and makes
+one real decision about the extra, modality-gated axis (FLAIR → WMH/Fazekas):
 
-| Trigger | Tool |
+| Trigger | Imaging axis (etiology) |
 |---|---|
-| `P(AD) >= 0.30` or `P(MCI) >= 0.40` | Amyloid PET / Centiloid path |
-| `P(VD) >= 0.20` or `P(AD) >= 0.50` | EPVS / vascular burden path |
-| T1 MRI present | MONAI structural segmentation |
+| T1 present | Free structural baseline: hippocampal Z (AD), automated Evans-like index (NPH), frontotemporal lobar Z (FTD) |
+| `P(VD) >= 0.20` **and FLAIR present** | WMH → Fazekas grade (vascular burden) |
+| PRD / SEF / PSY / TBI / LBD (and ODE) | Abstain — no off-the-shelf structural correlate; rely on clinical features |
 
 This means a high label does not directly produce a final answer. It triggers evidence gathering.
 
 Example:
 
 ```text
-High AD -> ask whether amyloid burden and hippocampal atrophy support the AD-like signal.
-High VD -> ask whether vascular markers support a vascular contribution.
-High MCI -> gather early-stage biomarker evidence without calling it dementia.
+High AD  -> ask whether hippocampal atrophy (Z < -1.5) supports the AD-like signal.
+High NPH -> ask whether the automated Evans-like index (> 0.30) shows ventriculomegaly.
+High FTD -> ask whether frontotemporal volume loss is disproportionate to global.
+High VD  -> if FLAIR is available, ask whether WMH burden (Fazekas >= 2) supports a vascular contribution.
+High MCI -> gather early-stage structural evidence without calling it dementia.
 ```
 
 ### 3. Detect mismatches
@@ -95,10 +98,10 @@ Examples:
 
 | Mismatch | Why it matters |
 |---|---|
-| High `AD` but amyloid-negative | Could be an AD mimic, false-negative amyloid result, or non-AD pathology |
-| Amyloid-positive but `NC` / low `AD` | Could be preclinical amyloid, not symptomatic AD |
-| Dementia-level `DE` but benign imaging | Symptoms may exceed imaging burden; consider psychiatric, systemic, medication, or longitudinal factors |
-| Amyloid-positive plus vascular burden | Mixed contribution; do not over-attribute symptoms to one cause |
+| High `AD` but no hippocampal atrophy | Could be early/atypical AD, an AD mimic, or limits of single-timepoint volumetry |
+| Hippocampal atrophy but low `AD` | Could be a non-AD process (LATE, hippocampal sclerosis) or age-related change |
+| Ventriculomegaly but low `NPH` | May reflect atrophy ex vacuo rather than hydrocephalus |
+| Dementia-level `DE` but benign structural imaging | Symptoms may exceed imaging burden; consider psychiatric, systemic, medication, or an unassessed axis (e.g. vascular without FLAIR) |
 
 This is important for judge questions: CRYCHIC does not hide label-evidence conflicts. It surfaces them.
 

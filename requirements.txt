@@ -10,7 +10,10 @@ pydantic>=2.6
 fastapi>=0.110
 uvicorn[standard]>=0.27
 
-# --- LLM transport (Nemotron, OpenAI-compatible) ---
+# --- LLM transport ---
+# Claude (native Anthropic SDK) is the default backend when ANTHROPIC_API_KEY is
+# set; httpx drives the alternative OpenAI-compatible (Nemotron) endpoint.
+anthropic>=0.69
 httpx>=0.27
 
 # --- imaging + numerics ---
@@ -20,10 +23,14 @@ monai>=1.3
 nibabel>=5.0
 numpy>=1.24
 pandas>=2.0
+scipy>=1.10
 
-# --- MYGO-Centiloid (amyloid-PET regressor; not on PyPI) ---
-mygo_centiloid @ git+https://github.com/JimmyToluene/MYGO-Centiloid.git@master
-
-# --- optional: attribution heatmap PNG (best-effort in adrd_tool) ---
+# --- slice/overlay rendering + attribution heatmap PNG ---
 matplotlib>=3.7
 seaborn>=0.12
+
+# --- optional: NeMo Agent Toolkit (NAT), only for the agent/workflow.yml path ---
+# The in-process spine (crychic/pipeline.py) does NOT require NAT. If you wire the
+# NAT workflow, install the toolkit but use the official MCP SDK server runtime —
+# NOT nvidia-nat-fastmcp, which pins an unstable FastMCP3 beta (CLAUDE.md §7).
+# nvidia-nat>=1.0
