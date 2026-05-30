@@ -27,10 +27,22 @@ VENT_RGB = (0.30, 0.80, 1.00)
 
 
 def normalize(sl: np.ndarray) -> np.ndarray:
-    """Percentile-clip a 2D slice to [0,1] for display."""
-    fg = sl[sl > 0]
-    lo, hi = (np.percentile(fg, [1, 99]) if fg.size else (0.0, 1.0))
-    return np.clip((sl - lo) / (hi - lo + 1e-6), 0, 1)
+    """Percentile-clip a 2D slice to [0,1] for display.
+
+    The MONAI bundle feeds us z-score-normalized volumes (``NormalizeIntensityd``,
+    ``nonzero=True``), so brain tissue spans negative and positive values around 0
+    while the skull-stripped background stays exactly 0. Windowing over ``sl > 0``
+    would discard the (negative-z) darker half of the brain and clip it to black,
+    leaving an almost-empty slice. Window over the nonzero brain instead, then force
+    the exact-zero background back to black.
+    """
+    fg = sl[sl != 0]
+    if fg.size == 0:
+        return np.zeros_like(sl, dtype=np.float32)
+    lo, hi = np.percentile(fg, [1, 99])
+    out = np.clip((sl - lo) / (hi - lo + 1e-6), 0, 1)
+    out[sl == 0] = 0.0  # keep the skull-stripped background black
+    return out
 
 
 def take(vol: np.ndarray, plane: str, idx: int) -> np.ndarray:

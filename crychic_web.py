@@ -50,6 +50,17 @@ def _sex_letter(clinical: dict) -> str | None:
     return {1: "M", 2: "F"}.get(clinical.get("SEX"))
 
 
+def _sex_word(clinical: dict) -> str | None:
+    return {1: "Male", 2: "Female"}.get(clinical.get("SEX"))
+
+
+def _as_int(v: Any) -> int | None:
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return None
+
+
 def _case_card(c) -> dict[str, Any]:
     age = c.clinical.get("NACCAGE")
     sex = _sex_letter(c.clinical)
@@ -59,6 +70,9 @@ def _case_card(c) -> dict[str, Any]:
         "id": c.id,
         "subject": c.subject,
         "demo": demo,
+        "age": _as_int(age),
+        "sex": _sex_word(c.clinical),
+        "educ": _as_int(c.clinical.get("EDUC")),
         "mmse": c.clinical.get("NACCMMSE"),
         "apoe4": c.clinical.get("NACCNE4S"),
         "true_stage": c.true_stage,

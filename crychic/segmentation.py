@@ -174,6 +174,12 @@ class _MonaiWholeBrainSeg:
             logits = self.inferer(x, self.network)
         labels = logits.argmax(dim=1)[0].detach().cpu().numpy().astype(np.int16)
         image_np = np.asarray(img[0].detach().cpu().numpy(), dtype=np.float32)
+        # Restrict the parcellation to the brain. The input is skull-stripped, so
+        # NormalizeIntensityd(nonzero=True) leaves the background at exactly 0; the
+        # network still argmaxes tissue classes into that background air, which both
+        # inflates volumes and lets the key-slice picker land on an empty slice. Drop
+        # every label where the image saw no brain.
+        labels[image_np == 0] = 0
         return labels, _voxel_volume_mm3(affine), image_np
 
     @classmethod

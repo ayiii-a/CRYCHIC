@@ -27,20 +27,22 @@
 <!-- ── Top bar ──────────────────────────────────────────────────────────── -->
 <header class="border-b border-slate-800 bg-slate-900/70 backdrop-blur sticky top-0 z-10">
   <div class="max-w-7xl mx-auto px-5 py-3 flex items-center gap-4 flex-wrap">
-    <div class="flex items-center gap-2">
-      <span class="text-2xl">⚕️</span>
+    <div class="flex items-center gap-3">
+      <span class="text-4xl">⚕️</span>
       <div>
-        <div class="font-bold text-lg leading-tight">CRYCHIC</div>
-        <div class="text-[11px] text-slate-400 -mt-0.5">Clinical Decision Support — not a diagnostic device</div>
+        <div class="font-bold text-3xl leading-tight">CRYCHIC</div>
+        <div class="text-sm text-slate-400">Clinical Decision Support — not a diagnostic device</div>
       </div>
     </div>
     <div class="flex-1"></div>
-    <select id="caseSelect" class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm min-w-[16rem]"></select>
-    <button id="runBtn" class="bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed
-            px-4 py-1.5 rounded-lg text-sm font-semibold transition">Run pipeline</button>
-  </div>
-  <div class="max-w-7xl mx-auto px-5 pb-3 flex items-center justify-end gap-3 flex-wrap">
-    <div id="agentStatus" class="text-[11px] text-slate-400 flex items-center gap-1.5 whitespace-nowrap"></div>
+    <div class="flex flex-col items-end gap-2">
+      <div id="agentStatus" class="text-[11px] text-slate-400 flex items-center gap-1.5 whitespace-nowrap"></div>
+      <div class="flex items-center gap-3">
+        <select id="caseSelect" class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm min-w-[16rem]"></select>
+        <button id="runBtn" class="bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed
+                px-4 py-1.5 rounded-lg text-sm font-semibold transition">Run pipeline</button>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -304,7 +306,7 @@ async function run(){
     const {case_id, case:meta} = await r.json();
     activeCaseId = case_id;
     showCase(meta);
-    $("runCase").textContent = `${meta.id} · subject ${meta.subject}`;
+    $("runCase").textContent = `${meta.id} · Subject ${meta.subject}`;
     pollTimer = setInterval(poll, 500); poll();
   }catch(e){ $("runView").classList.add("hidden");
     showError("Failed to start: "+e.message); $("runBtn").disabled=false; }
@@ -314,12 +316,21 @@ function showCase(m){
   const truth = m.true_stage ? `${m.true_stage}${m.true_etiologies.length?' / '+m.true_etiologies.join(', '):''}` : '—';
   $("caseTitle").textContent = m.id;
   $("caseId").textContent = activeCaseId;
-  const bits = [m.demo!=='—'?m.demo:null,
-    m.mmse!=null?`MMSE ${m.mmse}`:null,
-    m.apoe4!=null?`APOE ε4 ×${m.apoe4}`:null,
-    `${m.n_clinical} UDS vars`, m.has_t1?'T1 ✓':'no T1',
-    m.has_flair?'FLAIR ✓':'no FLAIR'].filter(Boolean);
-  $("caseMeta").innerHTML = bits.map(b=>`<div>${esc(b)}</div>`).join("");
+  const dash = "—";
+  const apoe = (m.apoe4!=null)
+    ? `${m.apoe4} APOE epsilon-4 allele${Number(m.apoe4)===1?'':'s'}` : dash;
+  const rows = [
+    ["Subject ID", m.subject || dash],
+    ["Age at visit", m.age!=null ? `${m.age} years` : dash],
+    ["Sex", m.sex || dash],
+    ["Education", m.educ!=null ? `${m.educ} years` : dash],
+    ["Genetic risk marker", apoe],
+  ];
+  $("caseMeta").innerHTML =
+    `<div class="font-semibold text-slate-300 mb-1">Patient Context</div>`
+    + `<ul class="list-disc pl-5 space-y-0.5">`
+    + rows.map(([k,v])=>`<li>${esc(k)}: <span class="text-slate-300">${esc(String(v))}</span></li>`).join("")
+    + `</ul>`;
   $("caseTruth").textContent = `Held-out truth (not shown to the model): ${truth}`;
 }
 
@@ -396,6 +407,8 @@ async function loadEvidence(){
   const rep = ev.report || {};
   $("report").innerHTML = window.marked ? marked.parse(rep.markdown||"") :
     `<pre class="whitespace-pre-wrap text-slate-300">${(rep.markdown||"").replace(/</g,"&lt;")}</pre>`;
+  boxifyFindings($("report"), "Imaging findings");               // one box per finding, 2 lines
+  collapseSections($("report"), ["Limitations", "References"]);  // long, low-action sections
   $("selfCheck").innerHTML = rep.self_check_passed
     ? `<span class="text-emerald-400">✓ self-check passed · ${rep.iterations} iter</span>`
     : `<span class="text-amber-400">⚠ unresolved after ${rep.iterations||0} iter</span>`;
@@ -407,28 +420,116 @@ async function loadEvidence(){
   $("reportCard").classList.remove("hidden");   // only now that the report exists
 }
 
+// Turn the bullet list under the named "## Heading" into one box per finding, with
+// the title on its own line and the explanation below it (the joining "—" dropped).
+function boxifyFindings(container, heading){
+  const h = [...container.querySelectorAll("h2")]
+    .find(x=>(x.textContent||"").trim().toLowerCase()===heading.toLowerCase());
+  if(!h) return;
+  const ul = h.nextElementSibling;
+  if(!ul || ul.tagName !== "UL") return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "space-y-2 my-2";
+  const notAssessed = [];   // ⚪ findings with no imaging correlate → collapsed tab
+  [...ul.children].forEach(li=>{
+    const strong = li.querySelector("strong");
+    // leading status dot (🟠/🟢/⚪) sits in the first text node before <strong>
+    let emoji = "";
+    if(li.firstChild && li.firstChild.nodeType === 3)
+      emoji = (li.firstChild.textContent || "").trim().split(/\s+/)[0] || "";
+    // title: the bold text, minus a redundant "— no imaging correlate" suffix
+    let title = (strong ? strong.textContent : li.textContent || "").trim()
+                  .replace(/\s*—\s*no imaging correlate\s*$/i, "");
+    // explanation: everything after <strong>, with the leading "—" separator removed
+    let desc = "";
+    if(strong){
+      const tmp = document.createElement("div");
+      let n = strong.nextSibling;
+      while(n){ tmp.appendChild(n.cloneNode(true)); n = n.nextSibling; }
+      desc = tmp.innerHTML.replace(/^\s*(?:—|-)\s*/, "").trim();
+    }
+    const box = document.createElement("div");
+    box.className = "border border-slate-800 rounded-lg p-3 bg-slate-950/40";
+    box.innerHTML =
+      `<div class="font-semibold text-slate-200">${emoji ? esc(emoji)+" " : ""}${esc(title)}</div>`
+      + (desc ? `<div class="text-[13px] text-slate-300 mt-1">${desc}</div>` : "");
+    if(emoji === "⚪") notAssessed.push(box);
+    else wrap.appendChild(box);
+  });
+
+  // Fold every "not assessed from imaging" (⚪) finding into one collapsed tab.
+  if(notAssessed.length){
+    const details = document.createElement("details");
+    details.className = "my-2";
+    const summary = document.createElement("summary");
+    summary.className = "cursor-pointer select-none text-slate-400 font-semibold py-1";
+    summary.textContent = `Not assessed from imaging (${notAssessed.length})`;
+    const inner = document.createElement("div");
+    inner.className = "space-y-2 mt-2";
+    notAssessed.forEach(b=>inner.appendChild(b));
+    details.appendChild(summary);
+    details.appendChild(inner);
+    wrap.appendChild(details);
+  }
+  ul.replaceWith(wrap);
+}
+
+// Turn the named "## Heading" sections of a rendered markdown block into collapsed
+// <details> (heading + everything up to the next h1/h2), so long reference material
+// doesn't crowd the report.
+function collapseSections(container, titles){
+  const want = titles.map(t=>t.toLowerCase());
+  [...container.querySelectorAll("h2")].forEach(h=>{
+    if(!want.includes((h.textContent||"").trim().toLowerCase())) return;
+    const details = document.createElement("details");
+    details.className = "my-2";
+    const summary = document.createElement("summary");
+    summary.className = "cursor-pointer select-none text-sky-300 font-semibold py-1";
+    summary.style.fontSize = "1.02rem";
+    summary.textContent = h.textContent;
+    details.appendChild(summary);
+    let node = h.nextElementSibling;
+    const move = [];
+    while(node && node.tagName !== "H1" && node.tagName !== "H2"){
+      move.push(node); node = node.nextElementSibling;
+    }
+    move.forEach(n=>details.appendChild(n));
+    h.replaceWith(details);
+  });
+}
+
 function renderCard(c){
   const pol = {supporting:["🟠","bg-amber-900/50 border-amber-700 text-amber-200","Supporting"],
                negative:["🟢","bg-emerald-900/40 border-emerald-700 text-emerald-200","Normal"],
                abstain:["⚪","bg-slate-800 border-slate-700 text-slate-400","Not assessed"]}[c.polarity]
               || ["•","bg-slate-800 border-slate-700 text-slate-400",c.polarity];
+
+  // Cards with no key image (not assessed from imaging): compact gray card —
+  // etiology name only (drop the "— …" suffix), no description.
+  if(!c.key_slice){
+    const shortTitle = c.title.split("—")[0].trim();
+    return `<div class="bg-slate-800/40 border border-slate-700/60 rounded-lg p-3">
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-sm font-semibold text-slate-400">${esc(shortTitle)}</span>
+        ${CHIP(pol[2], pol[1]+" border")}</div></div>`;
+  }
+
   const m = c.metric || {};
   const metricLine = (m.status === "measured")
     ? `<div class="text-[12px] text-slate-300 mt-1"><b>${m.value}${m.unit?(' '+m.unit):''}</b>
         (threshold ${m.comparator} ${m.threshold})</div>`
     : "";
-  const img = (c.key_slice)
-    ? `<img src="/api/cards/${activeCaseId}/${c.etiology}.png" loading="lazy"
-         class="rounded w-full bg-slate-950 mt-2" alt="${c.title}"
-         onerror="this.style.display='none'">`
-    : "";
+  const img = `<img src="/api/cards/${activeCaseId}/${c.etiology}.png" loading="lazy"
+         class="rounded w-full bg-slate-950 mt-2" alt="${esc(c.title)}"
+         onerror="this.style.display='none'">`;
   const refs = (c.references||[]).length
     ? `<div class="text-[10px] text-slate-500 mt-1">${c.references.join("; ")}</div>` : "";
   return `<div class="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
     <div class="flex items-center justify-between mb-1">
-      <span class="text-sm font-semibold text-slate-200">${c.title}</span>
+      <span class="text-sm font-semibold text-slate-200">${esc(c.title)}</span>
       ${CHIP(pol[2], pol[1]+" border")}</div>
-    <div class="text-[12px] text-slate-300">${c.sentence||""}</div>
+    <div class="text-[12px] text-slate-300">${esc(c.sentence||"")}</div>
     ${metricLine}${img}${refs}</div>`;
 }
 
