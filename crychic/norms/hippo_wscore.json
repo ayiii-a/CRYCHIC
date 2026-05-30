@@ -12,6 +12,6 @@
   "n": 0,
   "source": "placeholder",
   "threshold": -1.5,
-  "reference": "Method: hippocampal w-score (residualized for age, sex, TIV) per BrainChart (Bethlehem et al., Nature 2022) and Potvin et al. 2016 normative subcortical modelling. Coefficients here are an UNCALIBRATED placeholder, NOT fit on a same-pipeline cohort.",
+  "reference": "Method: hippocampal z-score (residualized for age, sex, TIV) per BrainChart (Bethlehem et al., Nature 2022) and Potvin et al. 2016 normative subcortical modelling. Coefficients here are an UNCALIBRATED placeholder, NOT fit on a same-pipeline cohort.",
   "note": "PLACEHOLDER (n=0, source=placeholder). Regenerate with scripts/fit_hippo_wscore.py on a cognitively-normal cohort segmented by THIS MONAI bundle before any clinical interpretation."
 }

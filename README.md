@@ -73,7 +73,7 @@ clinical_note + T1 (+ optional FLAIR)
 | S2 `xue_predict` | 13-label differential, **clinical + MRI embedding (multimodal)** | MCP tool |
 | S3 router | **decide which imaging checks to dispatch** | agent — the one decision |
 | S4a `segment_t1` | 133-structure whole-brain seg, **once** per case | MCP tool |
-| S4b `derive_metric` | hippocampal w-score / Evans-like screening flag (geometry) | MCP tool |
+| S4b `derive_metric` | hippocampal z-score / Evans-like screening flag (geometry) | MCP tool |
 | S4c `wmh_fazekas` | WMH → Fazekas (FLAIR; abstains without it) | MCP tool |
 | S4d translate | guardrailed finding sentence + key slice + overlay | agent + deterministic |
 | S5 aggregate | merge + reconcile + conflicts + provenance | plain code |
@@ -90,7 +90,7 @@ positive imaging → **incidental**.
 
 | Label | Metric | Threshold | Modality |
 |---|---|---|---|
-| AD | hippocampal w-score (age/sex/TIV-adjusted) | < -1.5 | T1 (free) |
+| AD | hippocampal z-score (age/sex/TIV-adjusted) | < -1.5 | T1 (free) |
 | NPH | automated Evans-like index *(screening flag)* | > 0.30 | T1 (free) |
 | VD | WMH volume → Fazekas | ≥ 2 | FLAIR (intensity proxy; optional WMH bundle) |
 | FTD / PRD / SEF / PSY / TBI / LBD | — | — | **abstain** (no defended structural correlate) |
@@ -142,7 +142,7 @@ version enters the record; the draft never auto-commits.
 crychic/
 ├── schemas.py            # Pydantic contracts — shared by servers AND agent
 ├── checks.py             # single source of truth for the tier-2 structural checks
-├── geometry.py           # deterministic math: hippo w-score, Evans-like, slice picker
+├── geometry.py           # deterministic math: hippo z-score, Evans-like, slice picker
 ├── overlay.py / render.py# annotated key-slice rendering
 ├── aggregate.py          # S5 plain code: reconcile + conflicts + provenance
 ├── report.py             # S7 self-contained printable HTML (embedded key slices)
@@ -153,7 +153,7 @@ crychic/
 ├── wmh.py                # FLAIR WMH → Fazekas (abstains without FLAIR)
 ├── pipeline.py           # the in-process S1→S7 spine
 ├── state.py / cases.py   # ephemeral case store; demo-cohort loader
-├── norms/hippo_wscore.json   # age/sex/TIV W-score coefficients
+├── norms/hippo_wscore.json   # age/sex/TIV Z-score coefficients
 ├── servers/              # MCP: imaging_server.py, xue_server.py
 └── agent/                # router.py, reasoner.py, extract.py, workflow.yml (NAT)
 crychic_web.py            # FastAPI UI over the spine (localhost)

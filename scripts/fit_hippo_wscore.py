@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Fit the hippocampal w-score coefficients from a cognitively-normal cohort.
+"""Fit the hippocampal z-score coefficients from a cognitively-normal cohort.
 
 This produces the *correct*, same-pipeline normative model for the hippocampal
 biomarker (CLAUDE.md §4 credibility anchor). It segments cognitively-normal
@@ -8,8 +8,8 @@ reference subjects with the SAME MONAI bundle the pipeline uses, then OLS-fits
     V_hippo_total_mm3 ~ intercept + b_age·age + b_sex_male·sex_male + b_tiv·TIV
 
 and writes the coefficients + residual SD to ``crychic/norms/hippo_wscore.json``.
-At inference, ``geometry.hippocampus_z()`` turns that into a w-score
-``w = (V - V_pred) / residual_SD`` (atrophy at w < -1.5) — the BrainChart /
+At inference, ``geometry.hippocampus_z()`` turns that into a z-score
+``z = (V - V_pred) / residual_SD`` (atrophy at z < -1.5) — the BrainChart /
 Potvin 2016 normative-modelling approach, but calibrated to THIS segmenter so
 there is no cross-method bias.
 
@@ -38,7 +38,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 _DEFAULT_OUT = _REPO_ROOT / "crychic" / "norms" / "hippo_wscore.json"
-_REFERENCE = ("Hippocampal w-score (age/sex/TIV-adjusted); coefficients fit by OLS on "
+_REFERENCE = ("Hippocampal z-score (age/sex/TIV-adjusted); coefficients fit by OLS on "
               "cognitively-normal subjects segmented by this MONAI wholeBrainSeg bundle. "
               "Method per BrainChart (Bethlehem 2022) / Potvin 2016.")
 
@@ -61,7 +61,7 @@ def _sex_male(raw) -> float | None:
 # ============================================================================ #
 
 def fit_wscore(records: list[Record], *, source: str = "cohort") -> dict:
-    """OLS-fit the w-score coefficients from reference records (pure; no I/O)."""
+    """OLS-fit the z-score coefficients from reference records (pure; no I/O)."""
     import numpy as np
 
     rows = [r for r in records
@@ -153,7 +153,7 @@ def main() -> int:
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(coeffs, indent=2) + "\n")
-    print(f"\nWrote w-score coefficients (n={coeffs['n']}) → {args.out}")
+    print(f"\nWrote z-score coefficients (n={coeffs['n']}) → {args.out}")
     for k in ("intercept", "b_age", "b_sex_male", "b_tiv", "residual_sd"):
         print(f"  {k:12} {coeffs[k]}")
     if coeffs["n"] < 20:

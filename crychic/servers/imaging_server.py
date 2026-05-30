@@ -51,7 +51,7 @@ def derive_metric(
     """Quantify one structural biomarker from the cached T1 segmentation.
 
     ``check`` selects the biomarker, each with its own threshold and reference:
-    ``hippo_z`` (hippocampal atrophy w-score for Alzheimer's disease, abnormal
+    ``hippo_z`` (hippocampal atrophy z-score for Alzheimer's disease, abnormal
     < -1.5) or ``evans`` (automated Evans-like screening flag for normal-pressure
     hydrocephalus, abnormal > 0.30). ``age``/``sex`` refine the hippocampal
     normative comparison. Returns the value, threshold, whether it is abnormal, and

@@ -9,7 +9,7 @@ retire a check by editing THIS table alone — the consumers read it, they do no
 re-declare it.
 
 After the v0.5 clinical trim (CLAUDE.md §2.8) only the two defensible T1 checks
-survive — the hippocampal w-score (AD) and the Evans-like *screening flag* (NPH) —
+survive — the hippocampal z-score (AD) and the Evans-like *screening flag* (NPH) —
 plus the FLAIR Fazekas (VD) axis. The frontotemporal lobar-Z check was dropped
 because its normative fraction was synthetic rather than atlas-matched, so it could
 not be defended at the bedside; FTD now abstains and is left to the clinical
@@ -63,9 +63,9 @@ class CheckSpec:
         return tmpl.format(v=value, thr=threshold, cmp=comparator, unit=unit)
 
 
-_HIPPO_REF = ("MONAI wholeBrainSeg (UNEST, 133-label); hippocampal w-score "
+_HIPPO_REF = ("MONAI wholeBrainSeg (UNEST, 133-label); hippocampal z-score "
               "(residualized for age, sex and TIV) per the BrainChart / Potvin 2016 "
-              "normative-modelling approach; atrophy at w < -1.5 (NIA-AA "
+              "normative-modelling approach; atrophy at z < -1.5 (NIA-AA "
               "medial-temporal criteria).")
 _EVANS_REF = ("MONAI wholeBrainSeg (UNEST) + geometry; automated Evans-like index "
               "(after Evans 1942), a coarse screening proxy with an intracranial "
@@ -80,17 +80,17 @@ CHECKS: dict[ImagingCheck, CheckSpec] = {
         check=ImagingCheck.HIPPO_Z,
         etiology="AD",
         modality=Modality.T1,
-        metric_name="Hippocampal volume w-score (age/sex/TIV-adjusted)",
+        metric_name="Hippocampal volume z-score (age/sex/TIV-adjusted)",
         unit="SD",
         threshold=geometry.HIPPO_Z_THRESHOLD,
         comparator="<",
         reference=_HIPPO_REF,
         sentence_abnormal=(
-            "Hippocampal volume is reduced — w-score {v}{unit} ({cmp} {thr} = "
+            "Hippocampal volume is reduced — z-score {v}{unit} ({cmp} {thr} = "
             "atrophy) — consistent with medial-temporal neurodegeneration; "
             "correlate clinically."),
         sentence_normal=(
-            "Hippocampal volume is within normal limits — w-score {v}{unit} "
+            "Hippocampal volume is within normal limits — z-score {v}{unit} "
             "(atrophy {cmp} {thr}) — no structural support for medial-temporal "
             "neurodegeneration on this measure."),
         plane="coronal",

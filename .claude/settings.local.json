@@ -23,7 +23,8 @@
       "Bash(python -c \"import torch, monai; print\\('torch', torch.__version__, 'cuda', torch.cuda.is_available\\(\\)\\); print\\('monai', monai.__version__\\)\")",
       "Bash(python -c \"from fastapi.testclient import TestClient; import crychic_web; h=TestClient\\(crychic_web.app\\).get\\('/'\\).text; assert 'no key image' in h and 'bg-slate-800/40' in h and \\\\\"c.title.split\\\\\" in h; print\\('renderCard updated: gray no-image cards, title trimmed, no description'\\)\")",
       "Bash(grep -niE \"^\\(SEX|EDUC|NACCAGE|NACCNE4S|NACCMMSE\\)$|SEX|EDUC|NE4S\")",
-      "Bash(python -c \"from fastapi.testclient import TestClient; import crychic_web; h=TestClient\\(crychic_web.app\\).get\\('/'\\).text; assert 'function collapseSections' in h and 'collapseSections\\(\\\\$\\(\\\\\"report\\\\\"\\)' in h; print\\('collapseSections present and wired into report rendering'\\)\")"
+      "Bash(python -c \"from fastapi.testclient import TestClient; import crychic_web; h=TestClient\\(crychic_web.app\\).get\\('/'\\).text; assert 'function collapseSections' in h and 'collapseSections\\(\\\\$\\(\\\\\"report\\\\\"\\)' in h; print\\('collapseSections present and wired into report rendering'\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)"
     ]
   }
 }

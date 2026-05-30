@@ -7,7 +7,7 @@ no LLM, no I/O — which makes them unit-testable on synthetic arrays without to
 or MONAI.
 
 What lives here (CLAUDE.md §4):
-    hippocampus_z   AD  — hippocampal w-score (residualized for age, sex, TIV)
+    hippocampus_z   AD  — hippocampal z-score (residualized for age, sex, TIV)
     evans_like_index NPH — automated Evans-like index (see the honesty caveat)
     pick_key_slice  the slice a clinician should verify a finding on
 
@@ -51,7 +51,7 @@ _AX_LR, _AX_PA, _AX_IS = 0, 1, 2
 HIPPO_Z_THRESHOLD = -1.5
 EVANS_THRESHOLD = 0.30
 
-# Hippocampal w-score model (the correct dementia normalization — see hippocampus_z):
+# Hippocampal z-score model (the correct dementia normalization — see hippocampus_z):
 #   V_pred = b0 + b_age·age + b_sex_male·sex_male + b_tiv·TIV ;  w = (V - V_pred) / sd
 # Coefficients load from norms/hippo_wscore.json; these defaults are an UNCALIBRATED
 # placeholder until fit on a same-pipeline cognitively-normal cohort
@@ -151,13 +151,13 @@ def hippocampus_z(
     age: float | None = None,
     sex: str | None = None,
 ) -> ZResult:
-    """Hippocampal w-score: a residualized Z adjusted for age, sex, and TIV.
+    """Hippocampal z-score: a residualized Z adjusted for age, sex, and TIV.
 
     The correct normalization for a dementia hippocampal biomarker (CLAUDE.md §4).
     Instead of a proportional ratio against age/sex bins, the expected volume is a
     regression on age, sex and TIV fit in cognitively-normal references, and
 
-        w = (V_observed - V_predicted) / residual_SD,    atrophy at w < -1.5
+        z = (V_observed - V_predicted) / residual_SD,    atrophy at z < -1.5
 
     mirroring the BrainChart (Bethlehem 2022) / Potvin 2016 normative-modelling
     approach. Coefficients come from ``norms/hippo_wscore.json``; the shipped
@@ -167,14 +167,14 @@ def hippocampus_z(
     """
     if not hippo_total_mm3 or not tiv_mm3:
         return ZResult(z=None, raw_mm3=hippo_total_mm3, tiv_mm3=tiv_mm3,
-                       caveats=["Hippocampus or TIV unavailable; w-score not computed."])
+                       caveats=["Hippocampus or TIV unavailable; z-score not computed."])
 
     c, used_default = _load_wscore()
     sd = float(c.get("residual_sd") or 0.0)
     if sd <= 0:
         return ZResult(z=None, raw_mm3=round(hippo_total_mm3, 1),
                        tiv_mm3=round(tiv_mm3, 1), used_fallback_norm=True,
-                       caveats=["Normative residual SD missing; w-score not computed."])
+                       caveats=["Normative residual SD missing; z-score not computed."])
 
     sex_male = {"M": 1.0, "F": 0.0}.get((sex or "").upper())
     age_imputed, sex_imputed = age is None, sex_male is None
@@ -189,12 +189,12 @@ def hippocampus_z(
     placeholder = used_default or c.get("source") != "cohort" or n < _MIN_VALID_NORM_N
     caveats = []
     if placeholder:
-        caveats.append("Hippocampal w-score uses UNCALIBRATED placeholder coefficients "
+        caveats.append("Hippocampal z-score uses UNCALIBRATED placeholder coefficients "
                        "(not fit on a cognitively-normal cohort segmented by this "
                        "bundle) — treat the absolute value as indicative only; "
                        "calibrate with scripts/fit_hippo_wscore.py.")
     else:
-        caveats.append(f"Hippocampal w-score from coefficients fit on {n} "
+        caveats.append(f"Hippocampal z-score from coefficients fit on {n} "
                        "cognitively-normal subjects segmented by this bundle "
                        "(age/sex/TIV-adjusted).")
     if age_imputed or sex_imputed:

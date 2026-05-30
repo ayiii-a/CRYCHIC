@@ -69,7 +69,7 @@ class ImagingCheck(str, Enum):
     schema-level identity the router reads to gate on modality.
     """
 
-    HIPPO_Z = "hippo_z"   # AD  — hippocampal w-score (TIV-normalized) [T1]
+    HIPPO_Z = "hippo_z"   # AD  — hippocampal z-score (TIV-normalized) [T1]
     EVANS = "evans"       # NPH — automated Evans-like screening flag  [T1]
     FAZEKAS = "fazekas"   # VD  — WMH volume → Fazekas grade           [FLAIR]
 
