@@ -83,7 +83,8 @@ def _measured_sentence(m: Metric) -> str:
 
 def translate(
     metric: Metric, *, check: ImagingCheck | None = None,
-    t1_path: str | None = None, out_dir: str | None = None,
+    t1_path: str | None = None, flair_path: str | None = None,
+    out_dir: str | None = None,
 ) -> FindingCard:
     """S4d: a Metric → a radiology-style FindingCard (value+threshold+ref, Inv #7).
 
@@ -107,12 +108,16 @@ def translate(
     sentence = _measured_sentence(metric)
 
     key_slice, png = None, None
-    if check is not None and t1_path:
+    rendered = None
+    if check is ImagingCheck.FAZEKAS and flair_path:
+        # The VD finding's key slice is a FLAIR overlay (WMH highlighted), not a T1 one.
+        rendered = overlay.render_wmh_overlay(flair_path, out_dir=out_dir)
+    elif check is not None and t1_path:
         # render_overlay returns None when the check has no T1 key-slice (Inv #7).
         rendered = overlay.render_overlay(t1_path, check, out_dir=out_dir)
-        if rendered:
-            key_slice = KeySlice(plane=rendered["plane"], index=rendered["index"])
-            png = rendered["png_path"]
+    if rendered:
+        key_slice = KeySlice(plane=rendered["plane"], index=rendered["index"])
+        png = rendered["png_path"]
 
     return FindingCard(
         etiology=etio, title=title, metric=metric,
@@ -154,8 +159,10 @@ _REASONER_SYSTEM = (
     "— never 'diagnose' affirmatively or 'recommend'; (2) keep the provided header "
     "and footer verbatim; (3) every numeric value keeps its threshold and a "
     "reference; (4) include non-empty Differential and Limitations sections; "
-    "(5) present choices as '○' option bullets, never numbered; (6) keep the "
-    "sign-off buttons. Use ONLY the numbers given — invent no values. Organize "
+    "(5) present choices as '○' option bullets, never numbered; (6) keep the footer's "
+    "statement that the draft requires clinician sign-off. Do NOT add any "
+    "'[Agree & sign] / [Edit] / [Disagree]' line — sign-off is handled by the "
+    "application UI. Use ONLY the numbers given — invent no values. Organize "
     "evidence; do not decide."
 )
 _CRITIC_SYSTEM = (
@@ -166,7 +173,8 @@ _CRITIC_SYSTEM = (
 _REVISER_SYSTEM = (
     "You are the Reviser for CRYCHIC. Given a report and CDS violations, output a "
     "corrected full Markdown report that fixes every violation while preserving the "
-    "evidence and every number. Keep the header/footer and sign-off verbatim."
+    "evidence and every number. Keep the header and footer verbatim; do not add a "
+    "'[Agree & sign]' sign-off line (the application UI handles sign-off)."
 )
 
 

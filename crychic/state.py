@@ -88,6 +88,7 @@ class CaseState:
     inputs: CaseInputs
     stage: str = Stage.INITIALIZED.value
     completed_tools: list[str] = field(default_factory=list)
+    notes: list[dict] = field(default_factory=list)  # live activity log (e.g. MONAI logs)
     error: str | None = None
     started_at: float = field(default_factory=time.monotonic)
     finished_at: float | None = None
@@ -107,6 +108,21 @@ class CaseState:
     def mark_tool_done(self, tool: str) -> None:
         if tool not in self.completed_tools:
             self.completed_tools.append(tool)
+
+    def add_note(self, source: str, message: str) -> None:
+        """Append one line to the live activity log (UI streams these in real time).
+
+        Called both from the loop thread and from blocking worker threads (e.g. the
+        MONAI log handler). ``list.append`` is atomic under CPython's GIL, so a reader
+        on the loop thread never sees a torn list. Bounded so a chatty backend can't
+        grow the per-poll payload without limit.
+        """
+        message = (message or "").strip()
+        if not message:
+            return
+        self.notes.append({"t": self.elapsed_seconds, "source": source, "message": message})
+        if len(self.notes) > 500:
+            del self.notes[: len(self.notes) - 500]
 
     def fail(self, error: str) -> None:
         self.error = error
@@ -132,6 +148,7 @@ class CaseState:
             "case_id": self.case_id,
             "stage": self.stage,
             "completed_tools": list(self.completed_tools),
+            "notes": list(self.notes),
             "elapsed_seconds": self.elapsed_seconds,
             "error": self.error,
         }

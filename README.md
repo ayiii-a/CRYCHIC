@@ -42,7 +42,7 @@ clinical_note + T1 (+ optional FLAIR)
                 │ MCP (localhost)                         │ OpenAI-compatible
                 ▼                                         ▼
 ┌───────────────────────────────┐          ┌───────────────────────────────┐
-│ MCP: imaging_server  :9901     │          │ Nemotron NIM / Claude endpoint │
+│ MCP: imaging_server  :9901     │          │ Nebius NIM / Claude endpoint │
 │   segment_t1                   │          │  (router rationale, reasoner,  │
 │   derive_metric (geometry)     │          │   critic↔reviser self-check)   │
 │   wmh_fazekas                  │          └───────────────────────────────┘
@@ -92,7 +92,7 @@ positive imaging → **incidental**.
 |---|---|---|---|
 | AD | hippocampal w-score (age/sex/TIV-adjusted) | < -1.5 | T1 (free) |
 | NPH | automated Evans-like index *(screening flag)* | > 0.30 | T1 (free) |
-| VD | WMH volume → Fazekas | ≥ 2 | FLAIR (extra model) |
+| VD | WMH volume → Fazekas | ≥ 2 | FLAIR (intensity proxy; optional WMH bundle) |
 | FTD / PRD / SEF / PSY / TBI / LBD | — | — | **abstain** (no defended structural correlate) |
 | ODE | tumour (BraTS) | — | niche — not built; abstain |
 
@@ -128,7 +128,7 @@ exposed as a tool — the router and reasoner are agent logic in `crychic/agent/
 | 3 | Traceable claims | References section + threshold symbols |
 | 4 | Counter-evidence | non-empty differential & limitations |
 | 5 | Options not orders | `○` bullets, never numbered |
-| 6 | Sign-off | `[✓ Agree & sign] [✏️ Edit] [✗ Disagree]` |
+| 6 | Sign-off requirement | footer states the draft requires clinician sign-off (the sign-off control lives in the app UI, not the report body) |
 
 The deterministic checker is authoritative: an online critic can add findings but
 can never wave through a report that actually violates a principle. Only the signed
@@ -147,7 +147,7 @@ crychic/
 ├── aggregate.py          # S5 plain code: reconcile + conflicts + provenance
 ├── report.py             # S7 self-contained printable HTML (embedded key slices)
 ├── cds_guard.py          # deterministic 6-principle CDS checker + boilerplate
-├── llm_client.py         # shared Nemotron/OpenAI transport + offline fallback
+├── llm_client.py         # shared Nebius/OpenAI transport + offline fallback
 ├── xue.py                # clinical-only Xue 2024 wrapper (no MRI ever)
 ├── segmentation.py       # MONAI wholeBrainSeg singleton + seg cache + derive_metric
 ├── wmh.py                # FLAIR WMH → Fazekas (abstains without FLAIR)
@@ -175,8 +175,9 @@ ANTHROPIC_API_KEY=sk-ant-... \
 TIER1_DEVICE=cuda TIER2_DEVICE=cuda \
   python scripts/run_one_case.py --case OAS30209 --report report.html
 
-# …or point the same step at an OpenAI-compatible Nemotron endpoint instead:
-NEMOTRON_URL=http://localhost:8000/v1/chat/completions \
+# …or point the same step at the OpenAI-compatible Nebius (Token Factory) endpoint:
+NEBIUS_URL=https://api.studio.nebius.com/v1/chat/completions \
+NEBIUS_API_KEY=... NEBIUS_MODEL=meta-llama/Llama-3.1-8B-Instruct \
   python scripts/run_one_case.py --case OAS30209
 
 # Or the web UI (localhost only):
@@ -192,7 +193,7 @@ The multimodal Xue model auto-uses a subject's precomputed SwinUNETR embedding
 clinical-only differential and the report wording adapts.
 
 The LLM steps are optional: with no backend configured (no `ANTHROPIC_API_KEY` and
-no `NEMOTRON_URL`), every agent step (extract, router rationale, reasoner, critic)
+no `NEBIUS_URL`), every agent step (extract, router rationale, reasoner, critic)
 falls back to a deterministic template, so the
 whole pipeline — self-check included — still runs offline.
 
@@ -219,10 +220,10 @@ MCI/borderline, **C** ≈ typical AD.
 |---|---|---|
 | `ANTHROPIC_API_KEY` / `CLAUDE_API_KEY` | — | **Claude backend** — set this to run the agent steps on Claude (native SDK) |
 | `CLAUDE_MODEL` | `claude-opus-4-8` | Claude model id for the agent steps |
-| `CRYCHIC_LLM_PROVIDER` | (auto) | force a backend: `claude` \| `nemotron` \| `offline` (auto: Claude if a key is set, else Nemotron, else offline) |
-| `NEMOTRON_URL` | (unset) | OpenAI-compatible chat endpoint (the alternative backend) |
-| `NEMOTRON_MODEL` | `nvidia/nemotron-nano-9b-v2` | model name in the request body |
-| `NEMOTRON_API_KEY` / `NGC_API_KEY` | — | bearer token for hosted endpoints |
+| `CRYCHIC_LLM_PROVIDER` | (auto) | force a backend: `claude` \| `nebius` \| `offline` (auto: Claude if a key is set, else Nebius, else offline) |
+| `NEBIUS_URL` | (unset) | OpenAI-compatible chat endpoint, e.g. `https://api.studio.nebius.com/v1/chat/completions` (the alternative backend) |
+| `NEBIUS_MODEL` | `meta-llama/Llama-3.1-8B-Instruct` | model name in the request body |
+| `NEBIUS_API_KEY` / `NGC_API_KEY` | — | bearer token for the Nebius endpoint |
 | `MCP_HOST` | `127.0.0.1` | MCP bind host (keep localhost — Inv #10) |
 | `IMAGING_PORT` / `XUE_PORT` | `9901` / `9902` | MCP server ports |
 | `MCP_TRANSPORT` | `streamable-http` | `streamable-http` or `stdio` (Inspector) |

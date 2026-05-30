@@ -5,7 +5,7 @@
     reasoner.py   S4d guardrailed finding sentences + S6 reconciliation report
     workflow.yml      NAT mcp_client config that wires these over the MCP servers
 
-Each step calls a small Nemotron model through :mod:`crychic.llm_client` and falls
+Each step calls the configured LLM through :mod:`crychic.llm_client` and falls
 back to a deterministic template offline, so the pipeline runs with or without a
 live endpoint. The flow is a fixed spine with exactly one LLM *decision* (the
 router, S3) — not a free-roaming ReAct loop (Inv #5).

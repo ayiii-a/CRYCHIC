@@ -12,7 +12,7 @@ uvicorn[standard]>=0.27
 
 # --- LLM transport ---
 # Claude (native Anthropic SDK) is the default backend when ANTHROPIC_API_KEY is
-# set; httpx drives the alternative OpenAI-compatible (Nemotron) endpoint.
+# set; httpx drives the alternative OpenAI-compatible (Nebius) endpoint.
 anthropic>=0.69
 httpx>=0.27
 
@@ -20,6 +20,11 @@ httpx>=0.27
 torch>=2.1
 torchvision>=0.16
 monai>=1.3
+# MONAI's `monaihosting` bundle download (wholeBrainSeg) tries
+# huggingface_hub.snapshot_download first; without it the download raises
+# OptionalImportError and segmentation silently abstains (every T1 card reads
+# "T1 not yet segmented"). Keep it explicit so a fresh install can segment.
+huggingface_hub>=0.23
 nibabel>=5.0
 numpy>=1.24
 pandas>=2.0

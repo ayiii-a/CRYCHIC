@@ -10,7 +10,7 @@ environment so the agent code never changes:
   block with ``cache_control`` — an identical prefix is then served from Anthropic's
   prompt cache. Opus 4.8 takes no sampling parameters, so the Claude path ignores
   ``temperature`` and uses the strict per-step system prompts to shape output.
-* **Nemotron / OpenAI-compatible** — the original ``NEMOTRON_URL`` chat-completions
+* **Nebius / OpenAI-compatible** — the original ``NEBIUS_URL`` chat-completions
   transport, used when an endpoint is configured and Claude is not.
 
 If neither is configured (or a request fails), :func:`chat` raises and each caller
@@ -29,18 +29,18 @@ _DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
 
 
 def _provider() -> str | None:
-    """Which backend :func:`chat` will use: ``'claude'`` | ``'nemotron'`` | ``None``."""
+    """Which backend :func:`chat` will use: ``'claude'`` | ``'nebius'`` | ``None``."""
     forced = os.environ.get("CRYCHIC_LLM_PROVIDER", "").strip().lower()
     if forced in ("claude", "anthropic"):
         return "claude"
-    if forced in ("nemotron", "openai"):
-        return "nemotron" if endpoint() else None
+    if forced in ("nebius", "openai"):
+        return "nebius" if endpoint() else None
     if forced in ("offline", "none", "off"):
         return None
-    # Auto: prefer Claude when a key is present, else the Nemotron endpoint.
+    # Auto: prefer Claude when a key is present, else the Nebius endpoint.
     if anthropic_api_key():
         return "claude"
-    return "nemotron" if endpoint() else None
+    return "nebius" if endpoint() else None
 
 
 # --- Claude (Anthropic) config ------------------------------------------------
@@ -54,19 +54,19 @@ def claude_model() -> str:
     return os.environ.get("CLAUDE_MODEL", _DEFAULT_CLAUDE_MODEL)
 
 
-# --- Nemotron / OpenAI-compatible config --------------------------------------
+# --- Nebius / OpenAI-compatible config --------------------------------------
 
 def endpoint() -> str | None:
-    return os.environ.get("NEMOTRON_URL") or None
+    return os.environ.get("NEBIUS_URL") or None
 
 
 def model() -> str:
-    return os.environ.get("NEMOTRON_MODEL", "nvidia/nemotron-nano-9b-v2")
+    return os.environ.get("NEBIUS_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
 
 
 def api_key() -> str | None:
     """Bearer token for the OpenAI-compatible endpoint; optional for self-hosted NIMs."""
-    return os.environ.get("NEMOTRON_API_KEY") or os.environ.get("NGC_API_KEY") or None
+    return os.environ.get("NEBIUS_API_KEY") or os.environ.get("NGC_API_KEY") or None
 
 
 # --- shared -------------------------------------------------------------------
@@ -81,8 +81,8 @@ def provider_label() -> str:
     p = _provider()
     if p == "claude":
         return f"claude · {claude_model()}"
-    if p == "nemotron":
-        return f"nemotron · {model()}"
+    if p == "nebius":
+        return f"nebius · {model()}"
     return "offline"
 
 
@@ -96,11 +96,11 @@ async def chat(system: str, user: str, *, max_tokens: int = 1400,
     p = _provider()
     if p == "claude":
         return await _chat_claude(system, user, max_tokens=max_tokens)
-    if p == "nemotron":
+    if p == "nebius":
         return await _chat_openai(system, user, max_tokens=max_tokens,
                                   temperature=temperature)
     raise RuntimeError(
-        "no LLM backend configured (set ANTHROPIC_API_KEY for Claude, or NEMOTRON_URL)")
+        "no LLM backend configured (set ANTHROPIC_API_KEY for Claude, or NEBIUS_URL)")
 
 
 # --- Claude transport ---------------------------------------------------------
@@ -141,14 +141,14 @@ async def _chat_claude(system: str, user: str, *, max_tokens: int) -> str:
     return "".join(b.text for b in message.content if b.type == "text").strip()
 
 
-# --- OpenAI-compatible (Nemotron) transport -----------------------------------
+# --- OpenAI-compatible (Nebius) transport -----------------------------------
 
 async def _chat_openai(system: str, user: str, *, max_tokens: int,
                        temperature: float) -> str:
-    """One OpenAI-compatible chat completion against ``NEMOTRON_URL``."""
+    """One OpenAI-compatible chat completion against ``NEBIUS_URL``."""
     url = endpoint()
     if not url:
-        raise RuntimeError("NEMOTRON_URL not configured")
+        raise RuntimeError("NEBIUS_URL not configured")
     import httpx
 
     headers = {}
@@ -165,7 +165,7 @@ async def _chat_openai(system: str, user: str, *, max_tokens: int,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-    timeout = float(os.environ.get("NEMOTRON_TIMEOUT", "60"))
+    timeout = float(os.environ.get("NEBIUS_TIMEOUT", "60"))
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(url, json=payload, headers=headers)
         resp.raise_for_status()

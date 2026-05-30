@@ -18,7 +18,9 @@
       "Bash(./scripts/coreg_all_flair.sh)",
       "Bash(awk '{print $5, $9}')",
       "Bash(timeout 120 python -c ' *)",
-      "Bash(grep -v \"FutureWarning\\\\|INFO -\\\\|cudart\\\\|^$\")"
+      "Bash(grep -v \"FutureWarning\\\\|INFO -\\\\|cudart\\\\|^$\")",
+      "Bash(git config *)",
+      "Bash(python -c \"import torch, monai; print\\('torch', torch.__version__, 'cuda', torch.cuda.is_available\\(\\)\\); print\\('monai', monai.__version__\\)\")"
     ]
   }
 }

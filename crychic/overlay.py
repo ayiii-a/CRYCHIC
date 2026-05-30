@@ -67,3 +67,32 @@ def render_overlay(t1_path: str, check: ImagingCheck, *, out_dir: str | None = N
     path = _overlay_dir(out_dir) / f"{stem}_{check.value}_{plane}{idx}.png"
     path.write_bytes(png)
     return {"png_path": str(path), "plane": plane, "index": int(idx)}
+
+
+def render_wmh_overlay(flair_path: str, *, out_dir: str | None = None) -> dict | None:
+    """Render the annotated key slice for the WMH/Fazekas (VD) finding.
+
+    Reads the FLAIR volume + WMH mask the :mod:`crychic.wmh` step already cached and
+    highlights the hyperintensities on the axial slice that shows the most burden.
+    Returns ``None`` if WMH was not computed for this FLAIR or no voxels were flagged
+    (no fabricated image).
+    """
+    from . import wmh
+
+    res = wmh.get_wmh(flair_path)
+    if res is None or not res.mask.any():
+        return None
+
+    plane = "axial"
+    idx = geometry.pick_key_slice(res.mask, plane)
+    caption = ("White-matter hyperintensities highlighted for verification; the "
+               "Fazekas grade, threshold and reference are on the finding card.")
+    png = render.compose_region_png(
+        res.image, plane, idx,
+        [(res.mask, (1.00, 0.82, 0.20), 0.55, "WMH")],  # amber = hyperintensity
+        "WMH burden (FLAIR)", caption)
+
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(flair_path).name) or "case"
+    path = _overlay_dir(out_dir) / f"{stem}_fazekas_{plane}{idx}.png"
+    path.write_bytes(png)
+    return {"png_path": str(path), "plane": plane, "index": int(idx)}

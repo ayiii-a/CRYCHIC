@@ -25,7 +25,9 @@ Design choices that matter:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import threading
 import traceback
 
 from . import aggregate, segmentation, wmh, xue
@@ -98,7 +100,7 @@ async def run_pipeline(state: CaseState) -> None:
         state.set_stage(Stage.IMAGING)
         age, sex = _age_sex(state.features.features)
         metrics, tools, caveats = await asyncio.to_thread(
-            _run_imaging, state.plan, inp, age, sex)
+            _run_imaging, state, state.plan, inp, age, sex)
         for t in tools:
             state.mark_tool_done(t)
         state.differential.caveats += caveats
@@ -135,8 +137,28 @@ def _age_sex(features: dict) -> tuple[float | None, str | None]:
     return age, sex
 
 
+class _NoteLogHandler(logging.Handler):
+    """Route a library's own log records into a case's live notes (UI activity log).
+
+    MONAI emits the bundle-download summary and other progress via ``logging``; we
+    forward those records verbatim so the UI shows what is actually happening during
+    the long, otherwise-opaque segmentation step instead of a frozen progress bar.
+    """
+
+    def __init__(self, state: CaseState, source: str) -> None:
+        super().__init__(level=logging.INFO)
+        self._state = state
+        self._source = source
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._state.add_note(self._source, record.getMessage())
+        except Exception:  # a logging handler must never raise into the caller
+            pass
+
+
 def _run_imaging(
-    plan, inp: CaseInputs, age: float | None, sex: str | None,
+    state: CaseState, plan, inp: CaseInputs, age: float | None, sex: str | None,
 ) -> tuple[list[tuple[ImagingCheck, Metric]], list[str], list[str]]:
     """Segment once, then derive each planned metric. Failures → UNAVAILABLE."""
     metrics: list[tuple[ImagingCheck, Metric]] = []
@@ -145,12 +167,44 @@ def _run_imaging(
 
     needs_t1 = inp.t1_path and any(c in _T1_CHECKS for c in plan.checks)
     if needs_t1:
+        # Stream MONAI's own logs into the live activity log for the duration of the
+        # (blocking) segmentation, then detach so we don't leak the handler.
+        monai_logger = logging.getLogger("monai")
+        handler = _NoteLogHandler(state, source="monai")
+        prev_level = monai_logger.level
+        monai_logger.addHandler(handler)
+        if prev_level == logging.NOTSET or prev_level > logging.INFO:
+            monai_logger.setLevel(logging.INFO)
+        cached = segmentation.get_segmentation(inp.t1_path) is not None
+        stop = threading.Event()
+        if not cached:
+            # MONAI's sliding-window inference is single-shot and emits no per-step
+            # logs, so the load+inference window is otherwise opaque. A heartbeat tells
+            # the UI it is alive and how long it has been running.
+            def _heartbeat() -> None:
+                while not stop.wait(5.0):
+                    state.add_note("monai", "…MONAI segmentation still running "
+                                   f"(no per-step logs); {state.elapsed_seconds:.0f}s elapsed")
+            threading.Thread(target=_heartbeat, daemon=True).start()
         try:
-            segmentation.segment(inp.t1_path)  # cached → derive_metric is geometry only (Inv #6)
+            state.add_note("imaging", "Segmentation cached — deriving metrics." if cached
+                           else "Loading MONAI wholeBrainSeg bundle (first run downloads "
+                                "the model), then running sliding-window inference on the T1…")
+            summary = segmentation.segment(inp.t1_path)  # cached → geometry only (Inv #6)
             tools.append("segment_t1")
+            state.add_note(
+                "imaging",
+                f"Segmentation complete — {summary['n_labels']} labels; "
+                f"hippocampus {summary['hippocampus_total_mm3']:.0f} mm³, "
+                f"ventricles {summary['ventricle_volume_mm3']:.0f} mm³.")
         except Exception as exc:
+            state.add_note("imaging", f"T1 segmentation failed: {exc}")
             caveats.append(f"T1 segmentation unavailable ({exc}); structural metrics "
                            "could not be computed and are reported as not assessed.")
+        finally:
+            stop.set()
+            monai_logger.removeHandler(handler)
+            monai_logger.setLevel(prev_level)
 
     for check in plan.checks:
         try:
@@ -176,7 +230,8 @@ def _translate_all(
     cards: list[FindingCard] = []
     for check, metric in metrics:
         t1 = inp.t1_path if check in _T1_CHECKS else None
-        cards.append(reasoner.translate(metric, check=check, t1_path=t1))
+        flair = inp.flair_path if check is ImagingCheck.FAZEKAS else None
+        cards.append(reasoner.translate(metric, check=check, t1_path=t1, flair_path=flair))
 
     modalities = router.available_modalities(inp.t1_path, inp.flair_path)
     for etiology in plan.abstained:

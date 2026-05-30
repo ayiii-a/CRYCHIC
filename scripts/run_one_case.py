@@ -4,7 +4,7 @@
 Exercises the real path end to end: the clinical differential (Xue 2024,
 clinical features only) + MONAI wholeBrainSeg structural metrics on the local GPU,
 while the LLM steps (S1 extract, S3 router rationale, S6 reasoner + self-check) go
-to the configured Nemotron/Claude endpoint. It picks a case from
+to the configured Nebius/Claude endpoint. It picks a case from
 ``data/crychic_oasis12.csv``, calls the same ``start_pipeline`` the spine uses,
 polls to completion, and prints the differential, the imaging plan, the finding
 cards, the reconciliation, and the report.
@@ -15,8 +15,8 @@ run for an LLM run.
 
 Usage
 -----
-    NEMOTRON_URL=https://integrate.api.nvidia.com/v1/chat/completions \
-    NEMOTRON_MODEL=nvidia/nemotron-nano-9b-v2 NEMOTRON_API_KEY=nvapi-... \
+    NEBIUS_URL=https://api.studio.nebius.com/v1/chat/completions \
+    NEBIUS_MODEL=meta-llama/Llama-3.1-8B-Instruct NEBIUS_API_KEY=... \
     TIER1_DEVICE=cuda TIER2_DEVICE=cuda \
     python scripts/run_one_case.py --case OAS30209
 
@@ -44,7 +44,7 @@ from crychic.state import CaseInputs
 async def _preflight() -> None:
     """Confirm the LLM endpoint actually answers (else everything runs offline)."""
     if not llm_client.online():
-        print("⚠  No LLM backend (set ANTHROPIC_API_KEY for Claude, or NEMOTRON_URL) — "
+        print("⚠  No LLM backend (set ANTHROPIC_API_KEY for Claude, or NEBIUS_URL) — "
               "every LLM step (extract/route/reason) will use the OFFLINE TEMPLATE.\n")
         return
     try:
@@ -54,7 +54,7 @@ async def _preflight() -> None:
     except Exception as e:  # noqa: BLE001
         print(f"✗ LLM call FAILED [{key_state}]: {type(e).__name__}: {e}\n"
               "  The pipeline will fall back to the offline template for all LLM "
-              "steps. Fix NEMOTRON_URL / NEMOTRON_API_KEY to test the LLM.\n")
+              "steps. Fix NEBIUS_URL / NEBIUS_API_KEY to test the LLM.\n")
 
 
 async def run(case_filter: str | None, use_t1: bool, report: str | None = None) -> int:

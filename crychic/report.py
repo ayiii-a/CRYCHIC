@@ -211,10 +211,5 @@ def render_report_html(u: UnifiedEvidence) -> str:
 
   <div class="foot">
     This draft is <b>not part of the medical record</b> until a clinician reviews and signs it.
-    <div class="signoff">
-      <span class="btn b-agree">✓ Agree &amp; sign</span>
-      <span class="btn b-edit">✎ Edit</span>
-      <span class="btn b-dis">✗ Disagree</span>
-    </div>
   </div>
 </div></body></html>"""

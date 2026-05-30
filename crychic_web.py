@@ -3,7 +3,7 @@
 
 Drives the same spine the MCP servers' tools wrap (clinical screen on the local
 GPU, MONAI structural metrics on the local GPU, the LLM steps on the configured
-Nemotron/Claude endpoint), exposed as a clinical single-page app:
+Nebius/Claude endpoint), exposed as a clinical single-page app:
 
     GET  /                              the single-page UI (webui/index.html)
     GET  /api/cases                     list the bundled OASIS-3 demo cohort
@@ -17,8 +17,8 @@ The annotated finding images are rendered once during the pipeline's S4d step
 localhost only — that is the "PHI never leaves the box" guarantee (Inv #10).
 
 Run (on the GPU box, with the LLM endpoint configured):
-    NEMOTRON_URL=https://api.anthropic.com/v1/chat/completions \
-    NEMOTRON_API_KEY=sk-ant-... NEMOTRON_MODEL=claude-sonnet-4-6 \
+    NEBIUS_URL=https://api.studio.nebius.com/v1/chat/completions \
+    NEBIUS_API_KEY=... NEBIUS_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TIER1_DEVICE=cuda TIER2_DEVICE=cuda \
     uvicorn crychic_web:app --host 127.0.0.1 --port 8080
 """
@@ -30,6 +30,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
+from crychic import llm_client
 from crychic.cases import find_emb, find_flair, find_t1, load_demo_cases
 from crychic.pipeline import start_pipeline
 from crychic.report import render_report_html
@@ -76,6 +77,18 @@ def _case_card(c) -> dict[str, Any]:
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return (_WEBUI / "index.html").read_text(encoding="utf-8")
+
+
+@app.get("/api/agent")
+def agent_status() -> dict[str, Any]:
+    """Which LLM backend the agent steps (extract/router/reasoner) run on.
+
+    ``online`` is False when no backend is configured — then every LLM step falls
+    back to the deterministic offline template, which the UI surfaces explicitly so
+    a template run is never mistaken for a live-model run.
+    """
+    backend, _, model = llm_client.provider_label().partition(" · ")
+    return {"online": llm_client.online(), "backend": backend, "model": model or None}
 
 
 @app.get("/api/cases")

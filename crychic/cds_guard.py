@@ -3,7 +3,7 @@
 The single source of truth for whether a report obeys the CDS output rules. It is
 pure string analysis — no LLM — so the self-check loop can never be talked past:
 even when an online critic says "PASS", a report that is actually missing its
-sign-off footer (or uses a forbidden directive verb) still fails here.
+footer disclaimer (or uses a forbidden directive verb) still fails here.
 
 The six principles, and what is checked:
     1  Hedged language        no "recommend", "the diagnosis is", "prescribe", ...
@@ -11,7 +11,9 @@ The six principles, and what is checked:
     3  Traceable claims       a References section + threshold symbols (≥/≤/</>) present
     4  Counter-evidence       a non-empty differential AND a non-empty limitations section
     5  Options not orders     '○' option bullets, never a numbered recommendation list
-    6  Sign-off               the [Agree & sign] [Edit] [Disagree] buttons in the footer
+    6  Sign-off requirement   the footer states the draft requires clinician sign-off
+                             (the sign-off control lives in the application UI, not the
+                             document body)
 
 Also holds the fixed CDS boilerplate (header/footer/sign-off/references) that every
 report carries verbatim, so the language model is never in a position to paraphrase
@@ -24,7 +26,7 @@ import re
 
 _HEADER_MARK = "Clinical Decision Support — not a diagnosis"
 _FOOTER_MARK = "Decision support only"
-SIGN_OFF = "[✓ Agree & sign] [✏️ Edit] [✗ Disagree]"
+_SIGN_MARK = "reviews and signs it"  # the footer must state the sign-off requirement
 
 CDS_HEADER = (
     f"> ⚕️ **{_HEADER_MARK}.** CRYCHIC organizes multi-modal evidence to assist a "
@@ -35,8 +37,7 @@ CDS_FOOTER = (
     "---\n"
     f"> ⚕️ **{_FOOTER_MARK}.** This draft is not part of the medical record until a "
     "clinician reviews and signs it. All values are model-derived and must be "
-    "verified against the source images and the full clinical context.\n\n"
-    f"{SIGN_OFF}"
+    "verified against the source images and the full clinical context."
 )
 
 # Structural-axis references (amyloid/PET references intentionally removed — §8).
@@ -120,9 +121,10 @@ def cds_violations(markdown: str) -> list[str]:
     if re.search(r"(?m)^\s*\d+\.\s", body):
         v.append("Principle 5: numbered list present — options must not be numbered.")
 
-    # 6 — sign-off buttons in footer.
-    if SIGN_OFF not in markdown:
-        v.append("Principle 6: sign-off buttons missing from footer.")
+    # 6 — the footer states the draft requires clinician sign-off (the interactive
+    # sign-off control lives in the application UI, not the document body).
+    if _SIGN_MARK not in low:
+        v.append("Principle 6: footer must state the draft requires clinician sign-off.")
 
     return v
 
@@ -132,6 +134,6 @@ def ensure_boilerplate(markdown: str) -> str:
     out = markdown
     if _HEADER_MARK not in out:
         out = CDS_HEADER + "\n\n" + out
-    if SIGN_OFF not in out:
+    if _FOOTER_MARK not in out:
         out = out.rstrip() + "\n\n" + CDS_FOOTER
     return out

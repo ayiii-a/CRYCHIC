@@ -28,7 +28,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 os.environ["CRYCHIC_LLM_PROVIDER"] = "offline"  # force offline (templates/rules)
-os.environ.pop("NEMOTRON_URL", None)
+os.environ.pop("NEBIUS_URL", None)
 os.environ["CRYCHIC_OVERLAY_DIR"] = tempfile.mkdtemp(prefix="crychic_smoke_")
 
 import numpy as np  # noqa: E402
@@ -169,7 +169,8 @@ def test_report_cds() -> None:
     md = reasoner.template_report(unified)
     viol = cds_guard.cds_violations(md)
     check(viol == [], f"report passes all 6 CDS principles: {viol or 'PASS'}")
-    check(cds_guard.SIGN_OFF in md and "○" in md, "sign-off + option bullets present (#9)")
+    check("reviews and signs it" in md and "○" in md,
+          "sign-off requirement + option bullets present (#9)")
 
 
 def _plan():

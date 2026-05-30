@@ -39,13 +39,40 @@
     <button id="runBtn" class="bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed
             px-4 py-1.5 rounded-lg text-sm font-semibold transition">Run pipeline</button>
   </div>
-  <div id="stepper" class="max-w-7xl mx-auto px-5 pb-3 flex items-center gap-1 text-[11px] text-slate-500 flex-wrap"></div>
+  <div class="max-w-7xl mx-auto px-5 pb-3 flex items-center justify-end gap-3 flex-wrap">
+    <div id="agentStatus" class="text-[11px] text-slate-400 flex items-center gap-1.5 whitespace-nowrap"></div>
+  </div>
 </header>
 
 <main class="max-w-7xl mx-auto px-5 py-5">
   <div id="idle" class="text-center text-slate-500 py-24">
     Pick a case and press <span class="text-sky-400 font-semibold">Run pipeline</span> to organize its evidence.
   </div>
+
+  <!-- ── Running view — big, centered, live activity log ─────────────────── -->
+  <div id="runView" class="hidden min-h-[62vh] flex items-center justify-center">
+    <div class="w-full max-w-4xl bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
+      <div class="flex items-center justify-between mb-1">
+        <h2 class="text-lg font-bold text-slate-100">Running pipeline</h2>
+        <span id="runElapsed" class="text-sm text-slate-400 tabular-nums">0.0s</span>
+      </div>
+      <div id="runCase" class="text-sm text-slate-400 mb-6">—</div>
+      <div id="stepperBig" class="flex items-center justify-center gap-1 text-xs whitespace-nowrap overflow-x-auto mb-7"></div>
+      <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-2">Activity log — what CRYCHIC is doing</div>
+      <div id="backlog" class="h-64 overflow-y-auto bg-slate-950/70 border border-slate-800 rounded-lg p-3 font-mono text-[12px] space-y-1"></div>
+    </div>
+  </div>
+
+  <!-- ── Finished — whole pipeline collapsed into a small expandable tab ──── -->
+  <details id="pipelineTab" class="hidden mb-4 bg-slate-900 border border-slate-800 rounded-xl">
+    <summary class="cursor-pointer select-none px-4 py-2.5 text-sm flex items-center gap-2">
+      <span id="pipelineTabSummary" class="text-slate-300">Pipeline</span>
+    </summary>
+    <div class="px-4 pb-4 pt-2 border-t border-slate-800">
+      <div id="stepperMini" class="flex items-center gap-1 text-[11px] flex-wrap mb-3"></div>
+      <div id="backlogTab" class="max-h-56 overflow-y-auto bg-slate-950/70 border border-slate-800 rounded-lg p-3 font-mono text-[11px] space-y-1"></div>
+    </div>
+  </details>
 
   <div id="board" class="hidden grid grid-cols-1 lg:grid-cols-[22rem_1fr] gap-5">
 
@@ -56,7 +83,7 @@
           <h2 id="caseTitle" class="font-bold text-base">—</h2>
           <span id="caseId" class="text-[11px] text-slate-500 font-mono"></span>
         </div>
-        <div id="caseMeta" class="mt-1 text-sm text-slate-400"></div>
+        <div id="caseMeta" class="mt-1 text-sm text-slate-400 space-y-0.5"></div>
         <div id="caseTruth" class="mt-2 text-[11px] text-slate-500"></div>
       </div>
 
@@ -92,7 +119,7 @@
         <div id="cardGrid" class="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
       </div>
 
-      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+      <div id="reportCard" class="hidden bg-slate-900 border border-slate-800 rounded-xl p-5">
         <div class="flex items-center justify-between mb-2">
           <h3 class="text-xs uppercase tracking-wide text-slate-400">Evidence report (draft)</h3>
           <div class="flex items-center gap-3">
@@ -103,12 +130,7 @@
         </div>
         <div id="report" class="md text-sm"></div>
         <div class="mt-4 pt-4 border-t border-slate-800">
-          <div class="flex flex-wrap gap-2">
-            <button data-act="agree" class="signoff bg-emerald-600 hover:bg-emerald-500 px-3.5 py-1.5 rounded-lg text-sm font-semibold">✓ Agree &amp; sign</button>
-            <button data-act="edit"  class="signoff bg-slate-700 hover:bg-slate-600 px-3.5 py-1.5 rounded-lg text-sm font-semibold">✏️ Edit</button>
-            <button data-act="disagree" class="signoff bg-rose-700 hover:bg-rose-600 px-3.5 py-1.5 rounded-lg text-sm font-semibold">✗ Disagree</button>
-          </div>
-          <p class="mt-2 text-[11px] text-slate-500">Nothing is written to any medical record — the clinician decides and signs outside this tool.</p>
+          <p class="text-[11px] text-slate-500">Nothing is written to any medical record — the clinician decides and signs outside this tool.</p>
         </div>
       </div>
     </section>
@@ -136,17 +158,118 @@ function stepIndex(stage){
   if(stage.startsWith("self_check")||stage.startsWith("revising")) return 7;
   return STAGE_IDX[stage] ?? -1;
 }
+
+// ── Agent (LLM backend) status ─────────────────────────────────────────────
+let agentInfo = {backend:"…", model:null, online:false};
+const PRETTY_BACKEND = {nebius:"Nebius", claude:"Claude", offline:"Offline template"};
+
+function stageLabel(stage){
+  if(!stage) return "idle";
+  if(stage.startsWith("self_check_attempt_")) return "self-check "+stage.split("_").pop();
+  if(stage.startsWith("revising_attempt_"))   return "revising "+stage.split("_").pop();
+  return {initialized:"initialized", extracting:"extracting", screening:"screening",
+    routing:"routing", imaging:"imaging", translating:"translating",
+    aggregating:"aggregating", reasoning:"reasoning", self_check_passed:"self-check passed",
+    complete:"complete", failed:"failed"}[stage] || stage;
+}
+
+async function loadAgent(){
+  try{ agentInfo = await (await fetch("/api/agent")).json(); }
+  catch(e){ agentInfo = {backend:"unknown", model:null, online:false}; }
+  renderAgent();
+}
+
+function renderAgent(live){
+  const dotCls = agentInfo.online ? "text-emerald-400" : "text-slate-500";
+  const name = PRETTY_BACKEND[agentInfo.backend] || agentInfo.backend;
+  const title = agentInfo.online
+    ? `Agent steps (extract / router / reasoner) run on this LLM backend`
+    : `No LLM backend configured — agent steps use the deterministic offline template`;
+  const model = agentInfo.model
+    ? `<span class="text-slate-500 font-mono">· ${agentInfo.model}</span>` : "";
+  let liveHtml = "";
+  if(live && live.stage){
+    const running = live.stage!=="complete" && live.stage!=="failed";
+    const cls = live.stage==="failed" ? "text-rose-400"
+              : running ? "text-sky-400 animate-pulse" : "text-emerald-400";
+    liveHtml = `<span class="text-slate-700 mx-1">|</span>
+      <span class="${cls}">${stageLabel(live.stage)}</span>
+      <span class="text-slate-500 tabular-nums">${(live.elapsed||0).toFixed(1)}s</span>`;
+  }
+  $("agentStatus").innerHTML =
+    `<span class="${dotCls}" title="${title}">●</span>
+     <span class="text-slate-300 font-medium">Agent</span>
+     <span class="text-slate-400">${name}</span> ${model} ${liveHtml}`;
+}
 function renderStepper(stage, tools){
   const cur = stepIndex(stage);
-  $("stepper").innerHTML = STEPS.map((s,i)=>{
+  const html = STEPS.map((s,i)=>{
     const done = i < cur || stage==="complete";
     const on = i === cur && stage!=="complete";
     const cls = done ? "text-emerald-400" : on ? "text-sky-400 font-semibold" : "text-slate-600";
     const dot = done ? "●" : on ? "◉" : "○";
-    let label = s;
-    if(i===3 && on && tools && tools.length) label += ` (${tools.length})`;
-    return `<span class="${cls}">${dot} ${label}</span>` + (i<STEPS.length-1?'<span class="text-slate-700 mx-1">—</span>':'');
+    return `<span class="${cls}">${dot} ${s}</span>` + (i<STEPS.length-1?'<span class="text-slate-700 mx-0.5">—</span>':'');
   }).join("");
+  ["stepperBig","stepperMini"].forEach(id=>{ const el=$(id); if(el) el.innerHTML=html; });
+}
+
+// ── Live activity log (backlog) ────────────────────────────────────────────
+let backlog = [], seenStage = null, seenTools = new Set(), seenNotes = 0;
+
+const STAGE_DESC = {
+  extracting:  "Extracting clinical features from the record",
+  screening:   "Screening — Xue 2024 differential (clinical + MRI embedding)",
+  routing:     "Routing — the one LLM decision: which imaging checks to run",
+  imaging:     "Imaging — MONAI whole-brain segmentation + structural metrics",
+  translating: "Translating metrics into guardrailed finding cards",
+  aggregating: "Aggregating — reconcile clinical vs imaging, surface conflicts",
+  reasoning:   "Reasoning — drafting the CDS report",
+  self_check_passed: "Self-check passed",
+  complete:    "Pipeline complete",
+  failed:      "Pipeline failed",
+};
+const TOOL_DESC = {
+  xue_predict: "Xue differential computed",
+  segment_t1:  "MONAI segmentation done (133-label whole-brain)",
+  wmh_fazekas: "WMH → Fazekas computed",
+  "derive_metric:hippo_z": "Hippocampal w-score derived",
+  "derive_metric:evans":   "Evans-like index derived",
+};
+function stageDesc(stage){
+  if(stage.startsWith("self_check_attempt_")) return "Self-check "+stage.split("_").pop()+" — CDS guard reviewing the draft";
+  if(stage.startsWith("revising_attempt_"))   return "Revising "+stage.split("_").pop()+" — fixing flagged CDS issues";
+  return STAGE_DESC[stage] || stage;
+}
+const esc = (s) => (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+function renderBacklog(){
+  const rows = backlog.map(l=>{
+    const c = l.kind==="done" ? "text-emerald-400" : l.kind==="fail" ? "text-rose-400"
+            : l.kind==="tool" ? "text-emerald-300" : l.kind==="log" ? "text-slate-400" : "text-sky-300";
+    const ic = l.kind==="tool" ? "✓" : l.kind==="fail" ? "✗" : l.kind==="done" ? "✓"
+             : l.kind==="log" ? "·" : "▸";
+    const tag = l.src ? `<span class="text-slate-600">[${esc(l.src)}]</span> ` : "";
+    const textCls = l.kind==="log" ? "text-slate-400" : "text-slate-300";
+    return `<div class="flex gap-2"><span class="text-slate-600 tabular-nums w-12 text-right shrink-0">${l.t.toFixed(1)}s</span>`
+         + `<span class="${c} shrink-0">${ic}</span><span class="${textCls} break-all">${tag}${esc(l.text)}</span></div>`;
+  }).join("");
+  ["backlog","backlogTab"].forEach(id=>{ const el=$(id); if(el){ el.innerHTML=rows; el.scrollTop=el.scrollHeight; } });
+}
+function pushLog(t, text, kind, src){ backlog.push({t:t||0, text, kind:kind||"stage", src}); renderBacklog(); }
+function updateBacklog(s){
+  if(s.stage !== seenStage){
+    seenStage = s.stage;
+    const kind = s.stage==="complete" ? "done" : s.stage==="failed" ? "fail" : "stage";
+    pushLog(s.elapsed_seconds, stageDesc(s.stage), kind);
+  }
+  (s.completed_tools||[]).forEach(t=>{
+    if(!seenTools.has(t)){ seenTools.add(t); pushLog(s.elapsed_seconds, TOOL_DESC[t] || ("tool: "+t), "tool"); }
+  });
+  // Backend notes (e.g. live MONAI logs) — only grow, so append what's new.
+  const notes = s.notes || [];
+  for(let i = seenNotes; i < notes.length; i++){
+    pushLog(notes[i].t, notes[i].message, "log", notes[i].source);
+  }
+  seenNotes = notes.length;
 }
 
 function bar(label, v, accent){
@@ -169,17 +292,22 @@ async function run(){
   const subj = $("caseSelect").value;
   $("runBtn").disabled = true; $("idle").classList.add("hidden");
   $("errorBox").classList.add("hidden"); $("board").classList.add("hidden");
+  $("reportCard").classList.add("hidden");        // hide last run's report
+  $("pipelineTab").classList.add("hidden");        // hide last run's collapsed pipeline
+  backlog = []; seenStage = null; seenTools = new Set(); seenNotes = 0; renderBacklog();
   clearInterval(pollTimer);
   renderStepper("extracting", []);
+  $("runView").classList.remove("hidden");         // big, centered, live
   try{
     const r = await fetch(`/api/run?case=${encodeURIComponent(subj)}`, {method:"POST"});
     if(!r.ok) throw new Error((await r.json()).detail || r.statusText);
     const {case_id, case:meta} = await r.json();
     activeCaseId = case_id;
     showCase(meta);
-    $("board").classList.remove("hidden");
+    $("runCase").textContent = `${meta.id} · subject ${meta.subject}`;
     pollTimer = setInterval(poll, 500); poll();
-  }catch(e){ showError("Failed to start: "+e.message); $("runBtn").disabled=false; }
+  }catch(e){ $("runView").classList.add("hidden");
+    showError("Failed to start: "+e.message); $("runBtn").disabled=false; }
 }
 
 function showCase(m){
@@ -191,7 +319,7 @@ function showCase(m){
     m.apoe4!=null?`APOE ε4 ×${m.apoe4}`:null,
     `${m.n_clinical} UDS vars`, m.has_t1?'T1 ✓':'no T1',
     m.has_flair?'FLAIR ✓':'no FLAIR'].filter(Boolean);
-  $("caseMeta").textContent = bits.join(" · ");
+  $("caseMeta").innerHTML = bits.map(b=>`<div>${esc(b)}</div>`).join("");
   $("caseTruth").textContent = `Held-out truth (not shown to the model): ${truth}`;
 }
 
@@ -199,9 +327,20 @@ async function poll(){
   try{
     const s = await (await fetch(`/api/status/${activeCaseId}`)).json();
     renderStepper(s.stage, s.completed_tools);
+    renderAgent({stage:s.stage, elapsed:s.elapsed_seconds});
+    updateBacklog(s);
+    $("runElapsed").textContent = (s.elapsed_seconds||0).toFixed(1)+"s";
     if(s.stage === "failed"){ clearInterval(pollTimer); $("runBtn").disabled=false;
+      $("runView").classList.add("hidden");
       showError("Pipeline failed:\n\n"+(s.error||"unknown error")); return; }
     if(s.stage === "complete"){ clearInterval(pollTimer); $("runBtn").disabled=false;
+      $("runView").classList.add("hidden");                 // tear down the big view
+      $("board").classList.remove("hidden");                // clean results page
+      const tab = $("pipelineTab"); tab.classList.remove("hidden"); tab.open = false;
+      $("pipelineTabSummary").innerHTML =
+        `<span class="text-emerald-400">✓ Pipeline complete</span> `
+        + `<span class="text-slate-500">· ${(s.elapsed_seconds||0).toFixed(1)}s `
+        + `· ${seenTools.size} tool(s) · click to view activity log</span>`;
       await loadEvidence(); }
   }catch(e){ clearInterval(pollTimer); $("runBtn").disabled=false; showError(e.message); }
 }
@@ -264,12 +403,14 @@ async function loadEvidence(){
   const rl = $("reportLink");
   rl.href = `/api/report/${activeCaseId}.html`;
   rl.classList.remove("hidden");
+
+  $("reportCard").classList.remove("hidden");   // only now that the report exists
 }
 
 function renderCard(c){
-  const pol = {supporting:["🟠","bg-amber-900/50 border-amber-700 text-amber-200","supporting"],
-               negative:["🟢","bg-emerald-900/40 border-emerald-700 text-emerald-200","normal"],
-               abstain:["⚪","bg-slate-800 border-slate-700 text-slate-400","not assessed"]}[c.polarity]
+  const pol = {supporting:["🟠","bg-amber-900/50 border-amber-700 text-amber-200","Supporting"],
+               negative:["🟢","bg-emerald-900/40 border-emerald-700 text-emerald-200","Normal"],
+               abstain:["⚪","bg-slate-800 border-slate-700 text-slate-400","Not assessed"]}[c.polarity]
               || ["•","bg-slate-800 border-slate-700 text-slate-400",c.polarity];
   const m = c.metric || {};
   const metricLine = (m.status === "measured")
@@ -286,21 +427,16 @@ function renderCard(c){
   return `<div class="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
     <div class="flex items-center justify-between mb-1">
       <span class="text-sm font-semibold text-slate-200">${c.title}</span>
-      ${CHIP(pol[0]+" "+pol[2], pol[1]+" border")}</div>
+      ${CHIP(pol[2], pol[1]+" border")}</div>
     <div class="text-[12px] text-slate-300">${c.sentence||""}</div>
     ${metricLine}${img}${refs}</div>`;
 }
 
 function showError(msg){ const b=$("errorBox"); b.textContent=msg; b.classList.remove("hidden"); }
 
-document.querySelectorAll(".signoff").forEach(b=>b.onclick=()=>{
-  const m = {agree:"Draft signed by clinician — recorded outside this tool (demo: not persisted).",
-             edit:"Edit mode — the clinician revises before signing (demo).",
-             disagree:"Marked as disagreed — draft discarded, nothing committed (demo)."};
-  toast(m[b.dataset.act]);
-});
 $("runBtn").onclick = run;
 loadCases();
+loadAgent();
 </script>
 </body>
 </html>
